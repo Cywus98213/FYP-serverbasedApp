@@ -41,7 +41,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "AR_GLASSES_APP";
-    private static final String SERVER_URL = "ws://192.168.0.112:8000";
+    private static final String SERVER_URL = "ws://Your-ip-address:8000";
     private WebSocketClient webSocketClient;
     private static final int RECORD_AUDIO_PERMISSION_CODE = 1;
     private boolean isRecording = false;
