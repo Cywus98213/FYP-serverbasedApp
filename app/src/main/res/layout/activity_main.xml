@@ -1,0 +1,204 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="8dp"
+    android:background="#000000"
+    android:keepScreenOn="true"
+    android:fitsSystemWindows="false">
+
+    <!-- AR Glasses Optimized Header -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="AR Speaker Recognition"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        android:gravity="center"
+        android:padding="8dp"
+        android:background="#00ff00"
+        android:textColor="#000000"
+        android:layout_marginBottom="8dp"
+        android:shadowColor="#000000"
+        android:shadowDx="1"
+        android:shadowDy="1"
+        android:shadowRadius="2" />
+
+    <!-- AR Glasses Connection Status -->
+    <TextView
+        android:id="@+id/connectionStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Disconnected"
+        android:textSize="12sp"
+        android:gravity="center"
+        android:padding="6dp"
+        android:background="#ff0000"
+        android:textColor="#ffffff"
+        android:layout_marginBottom="8dp"
+        android:shadowColor="#000000"
+        android:shadowDx="1"
+        android:shadowDy="1"
+        android:shadowRadius="1" />
+
+    <!-- AR Glasses Control Buttons -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginBottom="8dp">
+
+        <Button
+            android:id="@+id/testServerButton"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1"
+            android:text="Connect"
+            android:layout_marginEnd="4dp"
+            android:background="#00ff00"
+            android:textColor="#ffffff"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:shadowColor="#000000"
+            android:shadowDx="1"
+            android:shadowDy="1"
+            android:shadowRadius="1" />
+
+        <Button
+            android:id="@+id/disconnectButton"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1"
+            android:text="Disconnect"
+            android:layout_marginStart="4dp"
+            android:enabled="false"
+            android:background="#ff0000"
+            android:textColor="#ffffff"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:shadowColor="#000000"
+            android:shadowDx="1"
+            android:shadowDy="1"
+            android:shadowRadius="1" />
+    </LinearLayout>
+
+    <!-- AR Glasses Conversation Control Buttons -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginBottom="6dp">
+
+        <Button
+            android:id="@+id/requestButton"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1"
+            android:text="Start Recording"
+            android:layout_marginEnd="2dp"
+            android:background="#00ff00"
+            android:textColor="#ffffff"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:shadowColor="#000000"
+            android:shadowDx="1"
+            android:shadowDy="1"
+            android:shadowRadius="1" />
+
+        <Button
+            android:id="@+id/stopButton"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1"
+            android:text="Stop Recording"
+            android:layout_marginStart="2dp"
+            android:enabled="false"
+            android:background="#ff0000"
+            android:textColor="#ffffff"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:shadowColor="#000000"
+            android:shadowDx="1"
+            android:shadowDy="1"
+            android:shadowRadius="1" />
+    </LinearLayout>
+
+
+
+    <!-- AR Glasses Processing Status -->
+    <TextView
+        android:id="@+id/processingStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Please Connect first"
+        android:textSize="11sp"
+        android:gravity="center"
+        android:padding="6dp"
+        android:background="#0000ff"
+        android:textColor="#ffffff"
+        android:layout_marginBottom="6dp"
+        android:shadowColor="#000000"
+        android:shadowDx="1"
+        android:shadowDy="1"
+        android:shadowRadius="1" />
+
+    <!-- AR Glasses Conversation Header -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Live Conversation:"
+        android:textSize="14sp"
+        android:textStyle="bold"
+        android:textColor="#00ff00"
+        android:padding="6dp"
+        android:background="#000000"
+        android:layout_marginBottom="4dp"
+        android:shadowColor="#000000"
+        android:shadowDx="1"
+        android:shadowDy="1"
+        android:shadowRadius="1" />
+
+    <!-- AR Glasses Conversation Display - Optimized for Speaker Text -->
+    <ScrollView
+        android:id="@+id/chatScrollView"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="#000000"
+        android:padding="4dp"
+        android:scrollbars="vertical"
+        android:fadeScrollbars="false"
+        android:scrollbarStyle="outsideOverlay"
+        android:fillViewport="true"
+        android:scrollbarThumbVertical="@android:color/holo_green_light"
+        android:scrollbarTrackVertical="@android:color/darker_gray"
+        android:scrollbarSize="8dp">
+
+        <LinearLayout
+            android:id="@+id/conversationContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:minHeight="200dp"
+            android:paddingBottom="20dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Connect and join conversation to begin..."
+                android:textSize="14sp"
+                android:textColor="#00ff00"
+                android:padding="8dp"
+                android:shadowColor="#000000"
+                android:shadowDx="2"
+                android:shadowDy="2"
+                android:shadowRadius="3"
+                android:lineSpacingExtra="2dp"
+                android:maxLines="0"
+                android:singleLine="false" />
+
+        </LinearLayout>
+    </ScrollView>
+
+</LinearLayout>
