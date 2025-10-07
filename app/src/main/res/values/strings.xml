@@ -1,3 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">FYP-serverbasedApp</string>
+    <string name="app_name">AR Speaker Recognition</string>
+
+    <!-- Main Activity -->
+    <string name="connection_status">Connection Status</string>
+    <string name="disconnected">Disconnected</string>
+    <string name="connected">Connected</string>
+    <string name="connect">Connect</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="start_recording">Start Recording</string>
+    <string name="stop_recording">Stop Recording</string>
+    <string name="register_voice">Register Voice</string>
+    <string name="exclude_my_voice">Exclude My Voice</string>
+    <string name="live_conversation">Live Conversation</string>
+
+    <!-- Voice Registration Activity -->
+    <string name="voice_registration">Voice Registration</string>
+    <string name="recording_instruction">Please speak clearly for 5 seconds when recording starts</string>
+    <string name="back_to_main">Back to Main</string>
+    <string name="register_voice_button">Register Voice</string>
+    <string name="connecting_to_server">Connecting to server...</string>
 </resources>
+

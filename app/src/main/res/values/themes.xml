@@ -1,9 +1,83 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- Base application theme. -->
-    <style name="Base.Theme.FYPserverbasedApp" parent="Theme.Material3.DayNight.NoActionBar">
-        <!-- Customize your light theme here. -->
-        <!-- <item name="colorPrimary">@color/my_light_primary</item> -->
+    <!-- AR Glasses Optimized Theme -->
+    <style name="Theme.FYPServerbasedapp" parent="Theme.AppCompat.NoActionBar">
+        <!-- Primary brand colors - High visibility for AR glasses -->
+        <item name="colorPrimary">#00FF00</item>
+        <item name="colorPrimaryDark">#000000</item>
+        <item name="colorAccent">#00FFFF</item>
+
+        <!-- Button colors -->
+        <item name="colorButtonNormal">#00FF00</item>
+        <item name="android:colorButtonNormal">#00FF00</item>
+
+        <!-- Status bar - completely black for AR glasses -->
+        <item name="android:statusBarColor" tools:targetApi="l">#000000</item>
+        <item name="android:navigationBarColor" tools:targetApi="l">#000000</item>
+
+        <!-- Background - pure black for AR glasses OLED displays -->
+        <item name="android:windowBackground">#000000</item>
+        <item name="android:colorBackground">#000000</item>
+
+        <!-- Text colors - high contrast for AR glasses readability -->
+        <item name="android:textColor">#FFFFFF</item>
+        <item name="android:textColorPrimary">#00FF00</item>
+        <item name="android:textColorSecondary">#00FFFF</item>
+        <item name="android:textColorHint">#666666</item>
+
+        <!-- Text appearance - larger for AR glasses -->
+        <item name="android:textSize">14sp</item>
+        <item name="android:textStyle">bold</item>
+
+        <!-- Keep screen on for AR glasses -->
+        <item name="android:keepScreenOn">true</item>
+
+        <!-- Disable animations for AR glasses performance -->
+        <item name="android:windowAnimationStyle">@null</item>
+
+        <!-- Full screen for AR glasses -->
+        <item name="android:windowFullscreen">false</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowIsTranslucent">false</item>
     </style>
 
-    <style name="Theme.FYPserverbasedApp" parent="Base.Theme.FYPserverbasedApp" />
+    <!-- AR Glasses Button Style - Enabled State -->
+    <style name="ARGlassesButton" parent="Widget.AppCompat.Button">
+        <item name="android:layout_height">48dp</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textColor">@color/button_text_color</item>
+        <item name="android:background">@drawable/button_background</item>
+        <item name="android:elevation" tools:targetApi="lollipop">4dp</item>
+        <item name="android:stateListAnimator" tools:targetApi="lollipop">@null</item>
+        <item name="android:shadowColor">#000000</item>
+        <item name="android:shadowDx">2</item>
+        <item name="android:shadowDy">2</item>
+        <item name="android:shadowRadius">4</item>
+    </style>
+
+    <!-- AR Glasses Primary Button (Green) -->
+    <style name="ARGlassesButton.Primary">
+        <item name="android:backgroundTint">#00FF00</item>
+    </style>
+
+    <!-- AR Glasses Secondary Button (Blue) -->
+    <style name="ARGlassesButton.Secondary">
+        <item name="android:backgroundTint">#0066CC</item>
+    </style>
+
+    <!-- AR Glasses Danger Button (Red) -->
+    <style name="ARGlassesButton.Danger">
+        <item name="android:backgroundTint">#FF0000</item>
+    </style>
+
+    <!-- AR Glasses Switch Style -->
+    <style name="ARGlassesSwitch" parent="Widget.AppCompat.CompoundButton.Switch">
+        <item name="android:textColor">#FFFFFF</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:thumbTint">#00FF00</item>
+        <item name="android:trackTint">#333333</item>
+    </style>
 </resources>
+

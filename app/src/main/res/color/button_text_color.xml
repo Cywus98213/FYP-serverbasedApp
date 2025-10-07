@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Button text color selector for different states -->
+    <item android:color="@color/button_text_disabled" android:state_enabled="false"/>
+    <item android:color="@color/button_text_enabled" android:state_pressed="true"/>
+    <item android:color="@color/button_text_enabled" android:state_focused="true"/>
+    <item android:color="@color/button_text_enabled"/>
+</selector>
+

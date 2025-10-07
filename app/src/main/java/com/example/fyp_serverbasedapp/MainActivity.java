@@ -12,6 +12,8 @@ import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.Switch;
+import android.content.Intent;
 import android.os.Handler;
 import android.os.Looper;
 
@@ -41,7 +43,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "AR_GLASSES_APP";
-    private static final String SERVER_URL = "ws://Your-ip-address:8000";
+    private static final String SERVER_URL = "ws://192.168.0.112:8000";
     private WebSocketClient webSocketClient;
     private static final int RECORD_AUDIO_PERMISSION_CODE = 1;
     private boolean isRecording = false;
@@ -89,16 +91,42 @@ public class MainActivity extends AppCompatActivity {
     private LinearLayout conversationContainer;
     private ScrollView chatScrollView;
     private Button requestButton, stopButton, testServerButton, disconnectButton;
+    private Button voiceRegistrationButton;
+    private Switch excludeMyVoiceSwitch;
 
     // Simple speaker tracking
     private int speakerCount = 0;
+
+    // Voice registration settings
+    private boolean excludeMyVoice = false;
+    private String userVoiceId = null;
+
+    // ========== UI STYLING CONSTANTS ==========
+    // Speaker Name Styling
+    private static final float SPEAKER_NAME_TEXT_SIZE = 15f;  // Speaker name font size
+    private static final int SPEAKER_NAME_PADDING_H = 10;     // Horizontal padding
+    private static final int SPEAKER_NAME_PADDING_V = 6;      // Vertical padding
+    private static final int SPEAKER_NAME_BORDER_WIDTH = 2;   // Border thickness
+    private static final float SPEAKER_NAME_CORNER_RADIUS = 8f; // Corner roundness
+
+    // Speech Text Styling
+    private static final float SPEECH_TEXT_SIZE = 16f;        // Speech text font size
+    private static final int SPEECH_PADDING_H = 12;           // Horizontal padding
+    private static final int SPEECH_PADDING_V = 8;            // Vertical padding
+    private static final float SPEECH_LINE_SPACING = 6f;      // Extra space between lines
+    private static final float SPEECH_LINE_SPACING_MULT = 1.1f; // Line spacing multiplier
+    private static final float SPEECH_CORNER_RADIUS = 8f;     // Corner roundness
+
+    // Message Layout Styling
+    private static final int MESSAGE_PADDING_H = 6;           // Horizontal padding for message
+    private static final int MESSAGE_PADDING_V = 4;           // Vertical padding for message
+    // ============================================================
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        Log.d(TAG, "=== OPTIMIZED AR GLASSES APP STARTED ===");
 
         // Initialize UI components
         connectionStatus = findViewById(R.id.connectionStatus);
@@ -110,6 +138,8 @@ public class MainActivity extends AppCompatActivity {
         stopButton = findViewById(R.id.stopButton);
         testServerButton = findViewById(R.id.testServerButton);
         disconnectButton = findViewById(R.id.disconnectButton);
+        voiceRegistrationButton = findViewById(R.id.voiceRegistrationButton);
+        excludeMyVoiceSwitch = findViewById(R.id.excludeMyVoiceSwitch);
 
         // Set initial states
         updateButtonStates();
@@ -125,20 +155,17 @@ public class MainActivity extends AppCompatActivity {
 
         testServerButton.setOnClickListener(v -> {
             if (!isConnected) {
-                Log.d(TAG, "User clicked reconnect button");
                 shouldReconnect = true; // Enable auto-reconnect when user manually connects
                 reconnectAttempts = 0; // Reset attempts
                 reconnectWebSocket();
                 processingStatus.setText("Trying to reconnect...");
             } else {
-                Log.d(TAG, "User clicked ping button");
                 sendPingMessage();
                 processingStatus.setText("Manual ping sent to server...");
             }
         });
 
         requestButton.setOnClickListener(v -> {
-            Log.d(TAG, "User clicked start recording button - isRecording: " + isRecording);
             if (checkAudioPermission()) {
                 if (!isRecording) {
                     startRecording();
@@ -146,22 +173,31 @@ public class MainActivity extends AppCompatActivity {
                     processingStatus.setText("Already recording! Click Stop to finish.");
                 }
             } else {
-                Log.w(TAG, "Audio permission not granted, requesting...");
                 requestAudioPermission();
             }
         });
 
         stopButton.setOnClickListener(v -> {
-            Log.d(TAG, "User clicked stop recording button");
             stopRecording();
         });
 
         disconnectButton.setOnClickListener(v -> {
-            Log.d(TAG, "User clicked disconnect button");
             shouldReconnect = false; // Disable auto-reconnect when user manually disconnects
             stopClientPing(); // Stop ping when disconnecting
             leaveConversation();
             closeWebSocket();
+        });
+
+        voiceRegistrationButton.setOnClickListener(v -> {
+            Intent intent = new Intent(MainActivity.this, VoiceRegistrationActivity.class);
+            startActivity(intent);
+        });
+
+        excludeMyVoiceSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            excludeMyVoice = isChecked;
+            if (isConnected) {
+                sendVoiceExclusionSetting();
+            }
         });
 
 
@@ -179,10 +215,8 @@ public class MainActivity extends AppCompatActivity {
                         processAudioChunk(audioData);
                     }
                 } catch (InterruptedException e) {
-                    Log.d(TAG, "Audio buffer processor interrupted");
                     break;
                 } catch (Exception e) {
-                    Log.e(TAG, "Error in audio buffer processor: " + e.getMessage());
                 }
             }
         }).start();
@@ -191,7 +225,6 @@ public class MainActivity extends AppCompatActivity {
     private void processAudioChunk(byte[] audioData) {
         // Don't process audio if not in conversation
         if (!isInConversation) {
-            Log.d(TAG, "Not in conversation, ignoring audio chunk");
             return;
         }
 
@@ -201,7 +234,6 @@ public class MainActivity extends AppCompatActivity {
 
         // Log every 10 chunks to avoid spam
         if (audioChunks.size() % 10 == 0) {
-            Log.d(TAG, "Audio chunk processed: #" + audioChunks.size() + ", " + audioData.length + " bytes, total: " + totalBytesRecorded + " bytes");
         }
 
         // Continuous recording - no speech detection, just record everything
@@ -209,7 +241,6 @@ public class MainActivity extends AppCompatActivity {
         lastSpeechTime = currentTime;
         if (!hasDetectedSpeech) {
             hasDetectedSpeech = true;
-            Log.d(TAG, "Continuous recording started - no silence detection");
         }
 
         // Continuous recording - no UI status updates needed
@@ -217,17 +248,14 @@ public class MainActivity extends AppCompatActivity {
 
     private void joinConversation() {
         if (!checkAudioPermission()) {
-            Log.w(TAG, "Audio permission not granted, requesting...");
             requestAudioPermission();
             return;
         }
 
         if (isInConversation) {
-            Log.d(TAG, "Already in conversation, ignoring join request");
             return;
         }
 
-        Log.i(TAG, "=== JOINING CONVERSATION ===");
         isInConversation = true;
         audioSentCount = 0;
         audioReceivedCount = 0;
@@ -249,22 +277,16 @@ public class MainActivity extends AppCompatActivity {
 
     private void startRecording() {
         try {
-            Log.d(TAG, "=== START RECORDING CALLED ===");
-            Log.d(TAG, "isRecording: " + isRecording);
-            Log.d(TAG, "isConnected: " + isConnected);
 
             if (!checkAudioPermission()) {
-                Log.w(TAG, "Audio permission not granted, requesting...");
                 requestAudioPermission();
                 return;
             }
 
             if (isRecording) {
-                Log.d(TAG, "Already recording, ignoring start request");
                 return;
             }
 
-            Log.i(TAG, "=== STARTING RECORDING ===");
             isInConversation = true;
             audioSentCount = 0;
             audioReceivedCount = 0;
@@ -280,15 +302,12 @@ public class MainActivity extends AppCompatActivity {
 
             // Set recording state
             isRecording = true;
-            Log.d(TAG, "Set isRecording = true");
             updateButtonStates();
 
             // Start recording
             startSingleRecording();
 
-            Log.d(TAG, "=== START RECORDING COMPLETED ===");
         } catch (Exception e) {
-            Log.e(TAG, "Error in startRecording: " + e.getMessage(), e);
             runOnUiThread(() -> {
                 processingStatus.setText("Error starting recording: " + e.getMessage());
             });
@@ -296,20 +315,15 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void stopRecording() {
-        Log.d(TAG, "=== STOP RECORDING CALLED ===");
-        Log.d(TAG, "isRecording: " + isRecording);
-        Log.d(TAG, "isInConversation: " + isInConversation);
 
         if (!isRecording) {
-            Log.d(TAG, "Not recording, ignoring stop request");
             return;
         }
 
-        Log.i(TAG, "=== STOPPING RECORDING ===");
 
         // Update status to show processing
         runOnUiThread(() -> {
-            processingStatus.setText("📤 Stopping recording and processing...");
+            processingStatus.setText("Stopping recording and processing...");
         });
 
         // Stop the recording but don't reset isRecording yet
@@ -319,12 +333,10 @@ public class MainActivity extends AppCompatActivity {
                     audioRecorder.stop();
                 }
             } catch (Exception e) {
-                Log.e(TAG, "Error stopping AudioRecorder: " + e.getMessage());
             } finally {
                 try {
                     audioRecorder.release();
                 } catch (Exception e) {
-                    Log.e(TAG, "Error releasing AudioRecorder: " + e.getMessage());
                 }
                 audioRecorder = null;
             }
@@ -340,11 +352,9 @@ public class MainActivity extends AppCompatActivity {
         // Process and send the recorded audio
         processAndSendAudio();
 
-        Log.d(TAG, "=== STOP RECORDING COMPLETED ===");
     }
 
     private void leaveConversation() {
-        Log.i(TAG, "=== LEAVING CONVERSATION ===");
         isInConversation = false;
         isRecording = false;
         isRecordingState = false; // Reset recording state indicator
@@ -358,18 +368,13 @@ public class MainActivity extends AppCompatActivity {
             try {
                 if (audioRecorder.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) {
                     audioRecorder.stop();
-                    Log.d(TAG, "AudioRecorder stopped successfully");
                 }
             } catch (SecurityException e) {
-                Log.e(TAG, "SecurityException when stopping AudioRecorder: " + e.getMessage());
             } catch (Exception e) {
-                Log.e(TAG, "Exception when stopping AudioRecorder: " + e.getMessage());
             } finally {
                 try {
                     audioRecorder.release();
-                    Log.d(TAG, "AudioRecorder released successfully");
                 } catch (Exception e) {
-                    Log.e(TAG, "Exception when releasing AudioRecorder: " + e.getMessage());
                 }
                 audioRecorder = null;
             }
@@ -381,30 +386,23 @@ public class MainActivity extends AppCompatActivity {
         audioChunks.clear();
 
         runOnUiThread(() -> {
-            Log.d(TAG, "Setting processing status to: Left conversation. Click 'Join Conversation' to rejoin.");
             processingStatus.setText("Ready");
             updateButtonStates();
-            Log.d(TAG, "Processing status set successfully");
         });
 
         // Add multiple delayed updates to ensure the status is set correctly
         new Handler(Looper.getMainLooper()).postDelayed(() -> {
             runOnUiThread(() -> {
-                Log.d(TAG, "Delayed status update 1 - ensuring correct status");
                 processingStatus.setText("Ready");
             });
         }, 100);
 
         new Handler(Looper.getMainLooper()).postDelayed(() -> {
             runOnUiThread(() -> {
-                Log.d(TAG, "Delayed status update 2 - forcing correct status");
                 processingStatus.setText("Ready");
             });
         }, 500);
 
-        Log.i(TAG, "=== CONVERSATION STATS ===");
-        Log.i(TAG, "Audio sent: " + audioSentCount);
-        Log.i(TAG, "Audio received: " + audioReceivedCount);
     }
 
     private void startClientPing() {
@@ -423,14 +421,12 @@ public class MainActivity extends AppCompatActivity {
             }
         };
         pingHandler.postDelayed(pingRunnable, 20000); // Start first ping after 20 seconds
-        Log.d(TAG, "Client ping started - will ping every 20 seconds");
     }
 
     private void stopClientPing() {
         if (pingRunnable != null) {
             pingHandler.removeCallbacks(pingRunnable);
             pingRunnable = null;
-            Log.d(TAG, "Client ping stopped");
         }
     }
 
@@ -441,13 +437,10 @@ public class MainActivity extends AppCompatActivity {
                 pingMessage.put("type", "ping");
                 pingMessage.put("timestamp", System.currentTimeMillis());
                 webSocketClient.send(pingMessage.toString());
-                Log.d(TAG, "Ping message sent to server");
                 // Don't update UI for automatic pings
             } catch (JSONException e) {
-                Log.e(TAG, "Failed to create ping message: " + e.getMessage());
             }
         } else {
-            Log.w(TAG, "Cannot send ping - WebSocket not connected");
         }
     }
 
@@ -459,33 +452,27 @@ public class MainActivity extends AppCompatActivity {
                 resetMessage.put("timestamp", System.currentTimeMillis());
 
                 webSocketClient.send(resetMessage.toString());
-                Log.i(TAG, "Reset session message sent to server");
                 processingStatus.setText("Session reset - ready to start fresh");
             } catch (JSONException e) {
-                Log.e(TAG, "Failed to create reset session message: " + e.getMessage());
                 processingStatus.setText("Failed to reset session");
             }
         } else {
-            Log.w(TAG, "WebSocket not connected, cannot send reset session message");
         }
     }
 
 
     private boolean checkAudioPermission() {
         boolean hasPermission = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
-        Log.d(TAG, "Audio permission check: " + hasPermission);
         return hasPermission;
     }
 
     private void requestAudioPermission() {
-        Log.d(TAG, "Requesting audio permission...");
         ActivityCompat.requestPermissions(this,
                 new String[]{Manifest.permission.RECORD_AUDIO},
                 RECORD_AUDIO_PERMISSION_CODE);
     }
 
     private void reconnectWebSocket() {
-        Log.d(TAG, "Reconnecting WebSocket...");
         if (webSocketClient != null) {
             webSocketClient.close();
         }
@@ -497,11 +484,9 @@ public class MainActivity extends AppCompatActivity {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == RECORD_AUDIO_PERMISSION_CODE) {
             if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                Log.d(TAG, "Microphone permission granted");
                 processingStatus.setText("Microphone permission granted. Ready to join conversation!");
                 updateButtonStates();
             } else {
-                Log.e(TAG, "Microphone permission denied");
                 processingStatus.setText("Microphone permission is required to use this feature!");
             }
         }
@@ -509,13 +494,10 @@ public class MainActivity extends AppCompatActivity {
 
     private void setupWebSocket() {
         try {
-            Log.d(TAG, "Setting up WebSocket connection to: " + SERVER_URL);
             URI uri = new URI(SERVER_URL);
             webSocketClient = new WebSocketClient(uri) {
                 @Override
                 public void onOpen(ServerHandshake handshake) {
-                    Log.i(TAG, "=== WEBSOCKET CONNECTED ===");
-                    Log.i(TAG, "Server: " + handshake.getHttpStatusMessage());
                     isConnected = true;
                     reconnectAttempts = 0; // Reset reconnection attempts on successful connection
 
@@ -539,21 +521,27 @@ public class MainActivity extends AppCompatActivity {
                         runOnUiThread(() -> {
                             switch (type) {
                                 case "pong":
-                                    Log.d(TAG, "Received pong from server");
                                     connectionStatus.setText("Connected");
                                     connectionStatus.setTextColor(getResources().getColor(android.R.color.holo_green_dark));
                                     processingStatus.setText("Server is alive! (Status: " + response.optInt("status_code", 0) + ")");
                                     break;
 
                                 case "keep_alive":
-                                    Log.d(TAG, "Received keep-alive from server");
                                     // Update connection status to show it's alive
                                     connectionStatus.setText("Connected");
                                     connectionStatus.setTextColor(getResources().getColor(android.R.color.holo_green_dark));
                                     break;
 
                                 case "processing_started":
-                                    Log.d(TAG, "Processing started");
+                                    break;
+
+                                case "processing_status":
+                                    // Server is still processing - update UI and reset client ping timer
+                                    connectionStatus.setText("Connected");
+                                    connectionStatus.setTextColor(getResources().getColor(android.R.color.holo_green_dark));
+                                    processingStatus.setText("Processing on server... (working)");
+                                    // Restart client ping so the handler doesn't trigger a reconnect while server is busy
+                                    startClientPing();
                                     break;
 
                                 case "segment_result":
@@ -570,77 +558,73 @@ public class MainActivity extends AppCompatActivity {
                                         }
                                         int segmentNumber = segment.optInt("segment_number", 0);
 
-                                        // Android-side filtering
-                                        Log.i(TAG, "=== 📨 RECEIVED SEGMENT ===");
-                                        Log.i(TAG, "Segment #" + audioReceivedCount + " received immediately");
-                                        Log.i(TAG, "Speaker: " + speakerName);
-                                        Log.i(TAG, "Text: '" + text + "'");
-                                        Log.i(TAG, "Text length: " + (text != null ? text.length() : 0));
-                                        Log.i(TAG, "Is valid speech: " + isValidSpeech(text));
 
                                         if (isValidSpeech(text)) {
                                             addMessageToConversation(speakerName, text);
                                         } else {
-                                            Log.d(TAG, "Speech filtered out as background noise");
                                         }
 
                                     } catch (JSONException e) {
-                                        Log.e(TAG, "Failed to parse segment: " + e.getMessage());
                                         processingStatus.setText("Error parsing server response");
                                     }
                                     break;
 
                                 case "no_speech":
-                                    Log.d(TAG, "No speech detected by server");
                                     break;
 
                                 case "audio_received":
                                     // Server confirmed it received the audio
                                     canRecordNext = true;
-                                    Log.d(TAG, "=== AUDIO RECEIVED CONFIRMATION ===");
-                                    Log.d(TAG, "Server confirmed audio received");
-                                    Log.d(TAG, "Can record next: " + canRecordNext);
 
 
                                     break;
 
                                 case "audio_processed":
-                                    Log.i(TAG, "=== AUDIO PROCESSING COMPLETED ===");
-                                    Log.i(TAG, "Total segments: " + response.optInt("total_segments", 0));
 
                                     // Update status to show processing completed
                                     runOnUiThread(() -> {
-                                        processingStatus.setText("✅ Processing completed - Ready to record again");
+                                        processingStatus.setText("Processing completed - Ready to record again");
                                     });
 
                                     updateButtonStates();
                                     break;
 
                                 case "speakers_list":
-                                    Log.i(TAG, "=== SPEAKERS LIST RECEIVED ===");
                                     processingStatus.setText("Speakers auto-detected during conversation");
                                     break;
 
+                                case "voice_registered":
+                                    // Handle voice registration from VoiceRegistrationActivity
+                                    String voiceId = response.optString("voice_id", null);
+                                    if (voiceId != null) {
+                                        userVoiceId = voiceId;
+
+                                        // Auto-enable voice identification (show as "YOU")
+                                        excludeMyVoice = false;
+                                        excludeMyVoiceSwitch.setChecked(false);
+                                        sendVoiceExclusionSetting();
+
+                                        processingStatus.setText("Voice registered! You'll show as 'YOU'");
+                                    }
+                                    break;
+
                                 case "error":
-                                    Log.e(TAG, "=== SERVER ERROR ===");
                                     try {
                                         String error = response.getString("error");
-                                        Log.e(TAG, "Error message: " + error);
                                         processingStatus.setText("Error: " + error);
                                     } catch (JSONException e) {
-                                        Log.e(TAG, "Unknown error occurred");
                                         processingStatus.setText("Unknown error occurred");
                                     }
                                     isProcessing.set(false);
                                     updateButtonStates();
                                     break;
 
+
+
                                 default:
-                                    Log.w(TAG, "Unknown message type: " + type);
                             }
                         });
                     } catch (JSONException e) {
-                        Log.e(TAG, "Failed to parse JSON message: " + e.getMessage());
                         runOnUiThread(() -> {
                             processingStatus.setText("Received non-JSON message");
                         });
@@ -649,8 +633,6 @@ public class MainActivity extends AppCompatActivity {
 
                 @Override
                 public void onClose(int code, String reason, boolean remote) {
-                    Log.w(TAG, "=== WEBSOCKET DISCONNECTED ===");
-                    Log.w(TAG, "Code: " + code + ", Reason: " + reason + ", Remote: " + remote);
                     isConnected = false;
                     leaveConversation();
                     runOnUiThread(() -> {
@@ -663,7 +645,6 @@ public class MainActivity extends AppCompatActivity {
                     // Auto-reconnect if needed
                     if (shouldReconnect && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
                         reconnectAttempts++;
-                        Log.i(TAG, "Attempting to reconnect... (attempt " + reconnectAttempts + "/" + MAX_RECONNECT_ATTEMPTS + ")");
                         runOnUiThread(() -> {
                             processingStatus.setText("Reconnecting... (attempt " + reconnectAttempts + "/" + MAX_RECONNECT_ATTEMPTS + ")");
                         });
@@ -675,7 +656,6 @@ public class MainActivity extends AppCompatActivity {
                             }
                         }, 3000); // 3 second delay
                     } else if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-                        Log.e(TAG, "Max reconnection attempts reached. Please reconnect manually.");
                         runOnUiThread(() -> {
                             processingStatus.setText("Connection lost. Please reconnect manually.");
                         });
@@ -684,8 +664,6 @@ public class MainActivity extends AppCompatActivity {
 
                 @Override
                 public void onError(Exception ex) {
-                    Log.e(TAG, "=== WEBSOCKET ERROR ===");
-                    Log.e(TAG, "Error: " + ex.getMessage());
                     ex.printStackTrace();
                     isConnected = false;
                     leaveConversation();
@@ -699,7 +677,6 @@ public class MainActivity extends AppCompatActivity {
             };
             webSocketClient.connect();
         } catch (Exception e) {
-            Log.e(TAG, "WebSocket setup failed: " + e.getMessage());
             e.printStackTrace();
             isConnected = false;
             runOnUiThread(() -> {
@@ -715,7 +692,6 @@ public class MainActivity extends AppCompatActivity {
 
     private void startSingleRecording() {
         try {
-            Log.d(TAG, "=== STARTING SINGLE RECORDING ===");
 
             // Clear previous recording data
             audioChunks.clear();
@@ -727,16 +703,11 @@ public class MainActivity extends AppCompatActivity {
             // Set recording state
             isRecordingState = true;
             runOnUiThread(() -> {
-                processingStatus.setText("🔴 RECORDING - Speak now...");
+                processingStatus.setText("RECORDING - Speak now...");
             });
 
-            Log.d(TAG, "Recording parameters:");
-            Log.d(TAG, "Sample rate: " + SAMPLE_RATE);
-            Log.d(TAG, "Min recording duration: " + MIN_RECORDING_DURATION_MS + "ms");
-            Log.d(TAG, "Max recording duration: UNLIMITED (for speaker recognition testing)");
 
             if (!checkAudioPermission()) {
-                Log.e(TAG, "Audio permission not granted");
                 runOnUiThread(() -> {
                     processingStatus.setText("Error: Audio permission required");
                 });
@@ -745,17 +716,13 @@ public class MainActivity extends AppCompatActivity {
 
             int bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT) * BUFFER_SIZE_MULTIPLIER;
             if (bufferSize == AudioRecord.ERROR_BAD_VALUE || bufferSize == AudioRecord.ERROR) {
-                Log.e(TAG, "Invalid buffer size for AudioRecord: " + bufferSize);
                 return;
             }
 
-            Log.d(TAG, "AudioRecord buffer size: " + bufferSize);
 
             try {
                 audioRecorder = new AudioRecord(MediaRecorder.AudioSource.MIC, SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT, bufferSize);
-                Log.d(TAG, "AudioRecord created successfully");
             } catch (SecurityException e) {
-                Log.e(TAG, "SecurityException when creating AudioRecord: " + e.getMessage());
                 runOnUiThread(() -> {
                     processingStatus.setText("Error: Audio permission denied");
                 });
@@ -763,7 +730,6 @@ public class MainActivity extends AppCompatActivity {
             }
 
             if (audioRecorder.getState() != AudioRecord.STATE_INITIALIZED) {
-                Log.e(TAG, "AudioRecorder failed to initialize. State: " + audioRecorder.getState());
                 audioRecorder.release();
                 audioRecorder = null;
                 return;
@@ -777,9 +743,7 @@ public class MainActivity extends AppCompatActivity {
 
                 try {
                     audioRecorder.startRecording();
-                    Log.d(TAG, "AudioRecorder started successfully");
                 } catch (SecurityException e) {
-                    Log.e(TAG, "SecurityException when starting recording: " + e.getMessage());
                     runOnUiThread(() -> {
                         processingStatus.setText("Error: Audio permission denied");
                     });
@@ -797,7 +761,6 @@ public class MainActivity extends AppCompatActivity {
                     int bytesRead = audioRecorder.read(buffer, 0, buffer.length);
 
                     if (bytesRead < 0) {
-                        Log.e(TAG, "AudioRecord read failed: " + bytesRead);
                         break;
                     }
 
@@ -817,15 +780,12 @@ public class MainActivity extends AppCompatActivity {
 
                     // Log every 50 chunks to avoid spam
                     if (chunkCount % 50 == 0) {
-                        Log.d(TAG, "Recording progress: " + chunkCount + " chunks, " + totalBytesRead + " bytes");
                     }
                 }
 
-                Log.d(TAG, "Recording finished: " + chunkCount + " chunks, " + totalBytesRead + " total bytes");
 
             }).start();
         } catch (Exception e) {
-            Log.e(TAG, "Error in startSingleRecording: " + e.getMessage(), e);
             runOnUiThread(() -> {
                 processingStatus.setText("Error starting recording: " + e.getMessage());
             });
@@ -839,12 +799,10 @@ public class MainActivity extends AppCompatActivity {
                     audioRecorder.stop();
                 }
             } catch (Exception e) {
-                Log.e(TAG, "Error stopping AudioRecorder: " + e.getMessage());
             } finally {
                 try {
                     audioRecorder.release();
                 } catch (Exception e) {
-                    Log.e(TAG, "Error releasing AudioRecorder: " + e.getMessage());
                 }
                 audioRecorder = null;
             }
@@ -854,7 +812,7 @@ public class MainActivity extends AppCompatActivity {
         isRecording = false;
         isRecordingState = false;
         runOnUiThread(() -> {
-            processingStatus.setText("📤 Sending audio to server...");
+            processingStatus.setText("Sending audio to server...");
         });
         updateButtonStates();
 
@@ -897,18 +855,12 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void processAndSendAudio() {
-        Log.d(TAG, "=== PROCESS AND SEND AUDIO CALLED ===");
-        Log.d(TAG, "canRecordNext: " + canRecordNext);
-        Log.d(TAG, "audioChunks.size(): " + audioChunks.size());
-        Log.d(TAG, "totalBytesRecorded: " + totalBytesRecorded);
 
         if (!canRecordNext) {
-            Log.w(TAG, "Cannot record next, skipping audio processing");
             return;
         }
 
         if (audioChunks.isEmpty()) {
-            Log.w(TAG, "No audio chunks recorded, skipping audio processing");
             canRecordNext = true;
             isProcessing.set(false);
             return;
@@ -920,7 +872,6 @@ public class MainActivity extends AppCompatActivity {
 
         new Thread(() -> {
             try {
-                Log.d(TAG, "=== PROCESSING AUDIO IN BACKGROUND THREAD ===");
 
                 // Combine all audio chunks into one array
                 byte[] completeAudio = new byte[totalBytesRecorded];
@@ -930,29 +881,23 @@ public class MainActivity extends AppCompatActivity {
                     offset += chunk.length;
                 }
 
-                Log.d(TAG, "Combined audio length: " + completeAudio.length + " bytes");
-                Log.d(TAG, "Expected total bytes: " + totalBytesRecorded);
 
                 // Create WAV header and combine with audio data
                 byte[] wavBytes = createWavBytes(completeAudio);
 
                 if (wavBytes == null) {
-                    Log.e(TAG, "Failed to create WAV bytes");
                     canRecordNext = true;
                     isProcessing.set(false);
                     return;
                 }
 
-                Log.d(TAG, "WAV bytes created: " + wavBytes.length + " bytes");
 
                 // Convert to base64 and send directly
                 String base64Audio = Base64.encodeToString(wavBytes, Base64.DEFAULT);
-                Log.d(TAG, "Base64 audio length: " + base64Audio.length() + " characters");
 
                 sendWavAudioToServer(base64Audio);
 
             } catch (Exception e) {
-                Log.e(TAG, "Failed to process audio: " + e.getMessage(), e);
                 // Reset flags on error
                 canRecordNext = true;
                 isProcessing.set(false);
@@ -967,7 +912,6 @@ public class MainActivity extends AppCompatActivity {
             baos.write(audioData);
             return baos.toByteArray();
         } catch (IOException e) {
-            Log.e(TAG, "Failed to create WAV bytes: " + e.getMessage());
             return null;
         }
     }
@@ -1009,10 +953,6 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void addMessageToConversation(String speakerId, String speechText) {
-        Log.d(TAG, "=== ADDING MESSAGE TO CONVERSATION ===");
-        Log.d(TAG, "Speaker ID: " + speakerId);
-        Log.d(TAG, "Speech Text: " + speechText);
-        Log.d(TAG, "Conversation Container: " + (conversationContainer != null ? "NOT NULL" : "NULL"));
 
         runOnUiThread(() -> {
             if (conversationContainer != null) {
@@ -1038,65 +978,109 @@ public class MainActivity extends AppCompatActivity {
                             }
                         }
                     } catch (Exception e) {
-                        Log.w(TAG, "Error removing initial message: " + e.getMessage());
                     }
                 }
 
                 // Create message layout - use vertical for better text display
                 LinearLayout messageLayout = new LinearLayout(this);
                 messageLayout.setOrientation(LinearLayout.VERTICAL);
-                messageLayout.setPadding(6, 4, 6, 4);
+                messageLayout.setPadding(MESSAGE_PADDING_H, MESSAGE_PADDING_V,
+                        MESSAGE_PADDING_H, MESSAGE_PADDING_V);
                 messageLayout.setBackgroundColor(0x10000000); // Very light background
 
-                // Speaker name (visible and bold with better formatting)
+                // Set message layout to wrap content
+                messageLayout.setLayoutParams(new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                ));
+
+                // Speaker name with color-coded labels
                 TextView speakerName = new TextView(this);
                 String displaySpeakerName = speakerId;
+                int speakerColor = getResources().getColor(android.R.color.holo_blue_light);
 
-                // Simple speaker name formatting
-                if (speakerId.startsWith("SPEAKER_")) {
-                    displaySpeakerName = "Speaker " + speakerId.substring(8);
+                // speaker name formatting with color coding
+                if (speakerId.equals("USER")) {
+                    // Special handling for registered user
+                    displaySpeakerName = "YOU";
+                    int colorId = getResources().getIdentifier("user_color", "color", getPackageName());
+                    if (colorId != 0) {
+                        speakerColor = getResources().getColor(colorId);
+                    }
+                } else if (speakerId.startsWith("SPEAKER_")) {
+                    String speakerNumber = speakerId.substring(8);
+                    displaySpeakerName = "Speaker " + speakerNumber;
+
+                    // Get color for this speaker based on number
+                    try {
+                        int speakerNum = Integer.parseInt(speakerNumber);
+                        String colorName = "speaker_" + (speakerNum % 10); // Cycle through 10 colors
+                        int colorId = getResources().getIdentifier(colorName, "color", getPackageName());
+                        if (colorId != 0) {
+                            speakerColor = getResources().getColor(colorId);
+                        }
+                    } catch (NumberFormatException e) {
+                        // Use default color if parsing fails
+                    }
                 }
 
                 speakerName.setText(displaySpeakerName);
-                speakerName.setTextSize(13);
-                speakerName.setTextColor(getResources().getColor(android.R.color.holo_blue_light));
-                speakerName.setPadding(6, 3, 6, 3);
+                speakerName.setTextSize(SPEAKER_NAME_TEXT_SIZE);
+                speakerName.setTextColor(speakerColor);
+                speakerName.setPadding(SPEAKER_NAME_PADDING_H, SPEAKER_NAME_PADDING_V,
+                        SPEAKER_NAME_PADDING_H, SPEAKER_NAME_PADDING_V);
                 speakerName.setTypeface(null, android.graphics.Typeface.BOLD);
 
-                // Add background for better visibility
-                speakerName.setBackgroundColor(0x20000000);
-                speakerName.setPadding(8, 4, 8, 4);
+                // Set width to wrap content for speaker name
+                speakerName.setLayoutParams(new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                ));
 
-                // Speech text (readable)
+                // Add background for better visibility
+                speakerName.setBackgroundColor(getResources().getColor(R.color.speaker_name_bg));
+
+                // Add subtle border effect
+                android.graphics.drawable.GradientDrawable border = new android.graphics.drawable.GradientDrawable();
+                border.setColor(getResources().getColor(R.color.speaker_name_bg));
+                border.setStroke(SPEAKER_NAME_BORDER_WIDTH, speakerColor);
+                border.setCornerRadius(SPEAKER_NAME_CORNER_RADIUS);
+                speakerName.setBackground(border);
+
+                // Speech text with better readability
                 TextView speechTextView = new TextView(this);
 
                 // Check if speech text is empty or null
                 String displayText = speechText;
                 if (speechText == null || speechText.trim().isEmpty()) {
                     displayText = "[No speech detected]";
-                    Log.w(TAG, "Speech text is empty or null, using placeholder");
                 }
 
                 speechTextView.setText(displayText);
-                speechTextView.setTextSize(13);
+                speechTextView.setTextSize(SPEECH_TEXT_SIZE);
                 speechTextView.setTextColor(getResources().getColor(android.R.color.white));
-                speechTextView.setPadding(4, 2, 4, 4);
+                speechTextView.setPadding(SPEECH_PADDING_H, SPEECH_PADDING_V,
+                        SPEECH_PADDING_H, SPEECH_PADDING_V);
                 speechTextView.setMaxLines(0);
                 speechTextView.setSingleLine(false);
+                speechTextView.setLineSpacing(SPEECH_LINE_SPACING, SPEECH_LINE_SPACING_MULT);
+
+                // Add background for speech text
+                android.graphics.drawable.GradientDrawable textBg = new android.graphics.drawable.GradientDrawable();
+                textBg.setColor(getResources().getColor(R.color.speaker_text_bg));
+                textBg.setCornerRadius(SPEECH_CORNER_RADIUS);
+                speechTextView.setBackground(textBg);
+
+                // Set width to wrap content for speech text
                 speechTextView.setLayoutParams(new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
                         LinearLayout.LayoutParams.WRAP_CONTENT
                 ));
-
-                Log.d(TAG, "Created speech TextView with text: '" + displayText + "'");
-                Log.d(TAG, "Original speech text: '" + speechText + "'");
-                Log.d(TAG, "Speech text length: " + (speechText != null ? speechText.length() : 0));
 
                 messageLayout.addView(speakerName);
                 messageLayout.addView(speechTextView);
                 conversationContainer.addView(messageLayout);
 
-                Log.d(TAG, "Message added successfully. Total messages: " + conversationContainer.getChildCount());
 
                 // Auto-scroll to bottom with better scrolling behavior
                 scrollToBottom();
@@ -1104,7 +1088,6 @@ public class MainActivity extends AppCompatActivity {
                 // Limit conversation history to prevent memory issues during long conversations
                 if (conversationContainer.getChildCount() > 15) {
                     conversationContainer.removeViewAt(0);
-                    Log.d(TAG, "Removed oldest message. Current count: " + conversationContainer.getChildCount());
                 }
             }
         });
@@ -1143,7 +1126,6 @@ public class MainActivity extends AppCompatActivity {
         int bitDepth = 16;
         int channels = 1;
 
-        Log.d(TAG, "Writing WAV header - Data length: " + audioDataLength + ", Sample rate: " + sampleRate);
 
         // WAV header
         baos.write("RIFF".getBytes());
@@ -1192,25 +1174,19 @@ public class MainActivity extends AppCompatActivity {
                 message.put("sample_rate", SAMPLE_RATE);
 
                 webSocketClient.send(message.toString());
-                Log.i(TAG, "=== AUDIO SENT TO SERVER ===");
-                Log.i(TAG, "Chunk ID: " + chunkId);
-                Log.i(TAG, "Base64 length: " + base64Audio.length() + " characters");
-                Log.i(TAG, "Audio sent count: " + audioSentCount);
 
                 // Update status to show audio sent
                 runOnUiThread(() -> {
-                    processingStatus.setText("📡 Audio sent to server - Processing...");
+                    processingStatus.setText("Audio sent to server - Processing...");
                 });
 
             } catch (JSONException e) {
-                Log.e(TAG, "Failed to create audio message: " + e.getMessage());
                 runOnUiThread(() -> {
                     processingStatus.setText("Error sending audio to server");
                 });
                 isProcessing.set(false);
             }
         } else {
-            Log.e(TAG, "Cannot send audio - WebSocket not connected");
             runOnUiThread(() -> {
                 processingStatus.setText("Error: Not connected to server");
             });
@@ -1218,12 +1194,28 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private void sendVoiceExclusionSetting() {
+        if (webSocketClient != null && webSocketClient.isOpen()) {
+            try {
+                JSONObject message = new JSONObject();
+                message.put("type", "set_voice_exclusion");
+                message.put("exclude_voice", excludeMyVoice);
+                if (userVoiceId != null) {
+                    message.put("voice_id", userVoiceId);
+                }
+                message.put("timestamp", System.currentTimeMillis());
+
+                webSocketClient.send(message.toString());
+            } catch (JSONException e) {
+            }
+        } else {
+        }
+    }
+
     private void closeWebSocket() {
-        Log.d(TAG, "Closing WebSocket connection...");
         stopClientPing(); // Stop ping when closing
         if (webSocketClient != null && webSocketClient.isOpen()) {
             webSocketClient.close();
-            Log.d(TAG, "WebSocket closed successfully");
         }
 
         isConnected = false;
@@ -1238,7 +1230,6 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        Log.d(TAG, "=== APP DESTROYED ===");
         closeWebSocket();
     }
 }

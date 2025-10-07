@@ -1,5 +1,65 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="black">#FF000000</color>
-    <color name="white">#FFFFFFFF</color>
+    <!-- AR Glasses Optimized Colors - High Visibility -->
+
+    <!-- Primary Colors -->
+    <color name="ar_green">#00FF00</color>
+    <color name="ar_cyan">#00FFFF</color>
+    <color name="ar_blue">#0066CC</color>
+    <color name="ar_red">#FF0000</color>
+    <color name="ar_orange">#FF6600</color>
+    <color name="ar_yellow">#FFFF00</color>
+
+    <!-- Background Colors -->
+    <color name="ar_black">#000000</color>
+    <color name="ar_dark_gray">#111111</color>
+    <color name="ar_gray">#333333</color>
+    <color name="ar_light_gray">#666666</color>
+
+    <!-- Text Colors -->
+    <color name="ar_white">#FFFFFF</color>
+    <color name="ar_text_secondary">#CCCCCC</color>
+    <color name="ar_text_hint">#666666</color>
+
+    <!-- Button States - Darker Professional Colors -->
+    <color name="button_enabled_green">#00AA00</color>
+    <color name="button_enabled_blue">#0055AA</color>
+    <color name="button_enabled_red">#AA0000</color>
+    <color name="button_disabled">#1A1A1A</color>
+    <color name="button_pressed_green">#008800</color>
+    <color name="button_pressed_blue">#003366</color>
+    <color name="button_pressed_red">#880000</color>
+    <color name="button_hover_green">#00DD00</color>
+    <color name="button_hover_blue">#0077DD</color>
+    <color name="button_hover_red">#DD0000</color>
+
+    <!-- Button Text Colors -->
+    <color name="button_text_enabled">#FFFFFF</color>
+    <color name="button_text_disabled">#666666</color>
+
+    <!-- Status Colors -->
+    <color name="status_connected">#00FF00</color>
+    <color name="status_disconnected">#FF0000</color>
+    <color name="status_processing">#0066CC</color>
+    <color name="status_recording">#FF6600</color>
+
+    <!-- Speaker Colors - For identifying different speakers -->
+    <color name="speaker_0">#00FF00</color>  <!-- Bright Green -->
+    <color name="speaker_1">#00FFFF</color>  <!-- Cyan -->
+    <color name="speaker_2">#FF00FF</color>  <!-- Magenta -->
+    <color name="speaker_3">#FFFF00</color>  <!-- Yellow -->
+    <color name="speaker_4">#FF6600</color>  <!-- Orange -->
+    <color name="speaker_5">#00FF99</color>  <!-- Mint Green -->
+    <color name="speaker_6">#FF0099</color>  <!-- Pink -->
+    <color name="speaker_7">#9900FF</color>  <!-- Purple -->
+    <color name="speaker_8">#00CCFF</color>  <!-- Light Blue -->
+    <color name="speaker_9">#FFCC00</color>  <!-- Gold -->
+
+    <!-- Speaker Name Background -->
+    <color name="speaker_name_bg">#222222</color>
+    <color name="speaker_text_bg">#111111</color>
+
+    <!-- Special User Color (for registered user) -->
+    <color name="user_color">#FFD700</color>  <!-- Gold -->
 </resources>
+
