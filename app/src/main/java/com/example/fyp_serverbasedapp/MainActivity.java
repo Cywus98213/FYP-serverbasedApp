@@ -2,6 +2,7 @@ package com.example.fyp_serverbasedapp;
 
 import android.Manifest;
 import android.content.pm.PackageManager;
+import android.content.SharedPreferences;
 import android.media.AudioRecord;
 import android.media.MediaRecorder;
 import android.media.AudioFormat;
@@ -22,20 +23,21 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
-import org.java_websocket.client.WebSocketClient;
-import org.java_websocket.handshake.ServerHandshake;
 import org.json.JSONObject;
 import org.json.JSONException;
-
-import java.net.URI;
-import java.nio.ByteBuffer;
 import android.util.Base64;
+import org.java_websocket.client.WebSocketClient;
+import org.java_websocket.handshake.ServerHandshake;
+import java.net.URI;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.HashSet;
+import java.util.Collections;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -43,6 +45,10 @@ import java.util.concurrent.LinkedBlockingQueue;
 public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "AR_GLASSES_APP";
+    private static final String PREFS_NAME = "VoiceRegistrationPrefs";
+    private static final String PREF_USER_VOICE_ID = "userVoiceId";
+
+    // WebSocket configuration
     private static final String SERVER_URL = "ws://192.168.0.112:8000";
     private WebSocketClient webSocketClient;
     private static final int RECORD_AUDIO_PERMISSION_CODE = 1;
@@ -92,14 +98,21 @@ public class MainActivity extends AppCompatActivity {
     private ScrollView chatScrollView;
     private Button requestButton, stopButton, testServerButton, disconnectButton;
     private Button voiceRegistrationButton;
-    private Switch excludeMyVoiceSwitch;
 
     // Simple speaker tracking
     private int speakerCount = 0;
 
+    // Keep track of segments we've already displayed to avoid duplicates
+    private Set<String> seenSegments;
+
     // Voice registration settings
-    private boolean excludeMyVoice = false;
     private String userVoiceId = null;
+
+    // Voice registration recording state
+    private boolean isRecordingVoice = false;
+    private String recordedVoiceData = null;
+    private boolean hasRecordedVoice = false;
+    private static final int VOICE_RECORDING_DURATION_MS = 5000; // 5 seconds for voice registration
 
     // ========== UI STYLING CONSTANTS ==========
     // Speaker Name Styling
@@ -127,6 +140,8 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
+        // Load saved user voice ID from persistent storage
+        loadUserVoiceId();
 
         // Initialize UI components
         connectionStatus = findViewById(R.id.connectionStatus);
@@ -139,13 +154,21 @@ public class MainActivity extends AppCompatActivity {
         testServerButton = findViewById(R.id.testServerButton);
         disconnectButton = findViewById(R.id.disconnectButton);
         voiceRegistrationButton = findViewById(R.id.voiceRegistrationButton);
-        excludeMyVoiceSwitch = findViewById(R.id.excludeMyVoiceSwitch);
+
+        // Initialize dedupe set
+        seenSegments = Collections.synchronizedSet(new HashSet<String>());
 
         // Set initial states
         updateButtonStates();
         connectionStatus.setText("Disconnected");
         connectionStatus.setTextColor(getResources().getColor(android.R.color.holo_red_dark));
-        processingStatus.setText("Please Connect first");
+
+        // Update processing status based on voice registration
+        if (userVoiceId != null) {
+            processingStatus.setText("Voice registered. Connect to start.");
+        } else {
+            processingStatus.setText("Please Connect first");
+        }
 
         setupWebSocket();
 
@@ -189,17 +212,16 @@ public class MainActivity extends AppCompatActivity {
         });
 
         voiceRegistrationButton.setOnClickListener(v -> {
-            Intent intent = new Intent(MainActivity.this, VoiceRegistrationActivity.class);
-            startActivity(intent);
-        });
-
-        excludeMyVoiceSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> {
-            excludeMyVoice = isChecked;
-            if (isConnected) {
-                sendVoiceExclusionSetting();
+            if (checkAudioPermission()) {
+                if (!isRecordingVoice) {
+                    startVoiceRecording();
+                } else {
+                    stopVoiceRecording();
+                }
+            } else {
+                requestAudioPermission();
             }
         });
-
 
         // Start audio buffer processing
         startAudioBufferProcessor();
@@ -430,6 +452,20 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private void sendJoinConversationMessage() {
+        if (webSocketClient != null && webSocketClient.isOpen()) {
+            try {
+                JSONObject joinMessage = new JSONObject();
+                joinMessage.put("type", "join_conversation");
+                joinMessage.put("timestamp", System.currentTimeMillis());
+                webSocketClient.send(joinMessage.toString());
+                Log.i(TAG, "Sent join_conversation message to server");
+            } catch (JSONException e) {
+                Log.e(TAG, "Failed to send join_conversation message: " + e.getMessage());
+            }
+        }
+    }
+
     private void sendPingMessage() {
         if (webSocketClient != null && webSocketClient.isOpen()) {
             try {
@@ -439,8 +475,8 @@ public class MainActivity extends AppCompatActivity {
                 webSocketClient.send(pingMessage.toString());
                 // Don't update UI for automatic pings
             } catch (JSONException e) {
+                Log.e(TAG, "Failed to send ping: " + e.getMessage());
             }
-        } else {
         }
     }
 
@@ -456,7 +492,6 @@ public class MainActivity extends AppCompatActivity {
             } catch (JSONException e) {
                 processingStatus.setText("Failed to reset session");
             }
-        } else {
         }
     }
 
@@ -473,7 +508,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void reconnectWebSocket() {
-        if (webSocketClient != null) {
+        if (webSocketClient != null && webSocketClient.isOpen()) {
             webSocketClient.close();
         }
         setupWebSocket();
@@ -494,20 +529,24 @@ public class MainActivity extends AppCompatActivity {
 
     private void setupWebSocket() {
         try {
-            URI uri = new URI(SERVER_URL);
-            webSocketClient = new WebSocketClient(uri) {
+            URI serverUri = new URI(SERVER_URL);
+
+            webSocketClient = new WebSocketClient(serverUri) {
                 @Override
                 public void onOpen(ServerHandshake handshake) {
+                    Log.i(TAG, "WebSocket connected");
                     isConnected = true;
-                    reconnectAttempts = 0; // Reset reconnection attempts on successful connection
+                    reconnectAttempts = 0;
 
-                    // Start client-side ping to keep connection alive
                     startClientPing();
+
+                    // Send join_conversation message to initialize session with server
+                    sendJoinConversationMessage();
 
                     runOnUiThread(() -> {
                         connectionStatus.setText("Connected");
                         connectionStatus.setTextColor(getResources().getColor(android.R.color.holo_green_dark));
-                        processingStatus.setText("Connected to server. Ready to join conversation!");
+                        processingStatus.setText("Connected to server. Ready to record!");
                         updateButtonStates();
                     });
                 }
@@ -515,11 +554,21 @@ public class MainActivity extends AppCompatActivity {
                 @Override
                 public void onMessage(String message) {
                     try {
+                        // Log raw message for debugging parsing issues
+                        android.util.Log.d(TAG, "RAW_WS_MSG: " + message);
+
                         JSONObject response = new JSONObject(message);
-                        String type = response.getString("type");
+                        String type = response.optString("type", "");
 
                         runOnUiThread(() -> {
                             switch (type) {
+                                case "conversation_joined":
+                                    connectionStatus.setText("Connected");
+                                    connectionStatus.setTextColor(getResources().getColor(android.R.color.holo_green_dark));
+                                    processingStatus.setText("Joined conversation - Ready to record!");
+                                    Log.i(TAG, "Successfully joined conversation");
+                                    break;
+
                                 case "pong":
                                     connectionStatus.setText("Connected");
                                     connectionStatus.setTextColor(getResources().getColor(android.R.color.holo_green_dark));
@@ -548,24 +597,76 @@ public class MainActivity extends AppCompatActivity {
                                     audioReceivedCount++;
                                     try {
                                         JSONObject segment = response.getJSONObject("segment");
-                                        String speaker = segment.getString("speaker_id");
-                                        String text = segment.getString("text");
+                                        // Support both 'speaker_id' (new) and 'speaker' (legacy)
+                                        String speaker = segment.optString("speaker_id", segment.optString("speaker", "UNKNOWN"));
+                                        // Support both 'text' (new) and 'transcription' (legacy)
+                                        String text = segment.optString("text", segment.optString("transcription", ""));
+
+                                        // Check if this is the wearer's voice
+                                        boolean isWearer = segment.optBoolean("is_wearer", false);
 
                                         // Simple speaker name formatting
-                                        String speakerName = speaker;
-                                        if (speaker.startsWith("SPEAKER_")) {
+                                        String speakerName;
+                                        if (isWearer) {
+                                            speakerName = "YOU";  // Display as "YOU" for the wearer
+                                        } else if (speaker.startsWith("SPEAKER_")) {
                                             speakerName = "Speaker " + speaker.substring(8); // Remove "SPEAKER_" prefix
+                                        } else {
+                                            speakerName = speaker;
                                         }
                                         int segmentNumber = segment.optInt("segment_number", 0);
 
 
                                         if (isValidSpeech(text)) {
-                                            addMessageToConversation(speakerName, text);
+                                            String key = makeSegmentKey(segment, response.optString("chunk_id", null));
+                                            if (!seenSegments.contains(key)) {
+                                                seenSegments.add(key);
+                                                addMessageToConversation(speakerName, text);
+                                            } else {
+                                                // Duplicate - ignore
+                                            }
                                         } else {
                                         }
 
                                     } catch (JSONException e) {
                                         processingStatus.setText("Error parsing server response");
+                                    }
+                                    break;
+
+                                case "processing_result":
+                                    // Server sent the full array of segments in one message
+                                    try {
+                                        org.json.JSONArray segs = response.optJSONArray("segments");
+                                        if (segs != null) {
+                                            for (int si = 0; si < segs.length(); si++) {
+                                                JSONObject segment = segs.optJSONObject(si);
+                                                if (segment == null) continue;
+                                                String speaker = segment.optString("speaker_id", segment.optString("speaker", "UNKNOWN"));
+                                                String text = segment.optString("text", segment.optString("transcription", ""));
+
+                                                // Check if this is the wearer's voice
+                                                boolean isWearer = segment.optBoolean("is_wearer", false);
+
+                                                String speakerName;
+                                                if (isWearer) {
+                                                    speakerName = "YOU";  // Display as "YOU" for the wearer
+                                                } else if (speaker.startsWith("SPEAKER_")) {
+                                                    speakerName = "Speaker " + speaker.substring(8);
+                                                } else {
+                                                    speakerName = speaker;
+                                                }
+
+                                                if (isValidSpeech(text)) {
+                                                    String key = makeSegmentKey(segment, response.optString("chunk_id", null));
+                                                    if (!seenSegments.contains(key)) {
+                                                        seenSegments.add(key);
+                                                        addMessageToConversation(speakerName, text);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } catch (Exception e) {
+                                        processingStatus.setText("Error parsing processing_result");
                                     }
                                     break;
 
@@ -598,13 +699,9 @@ public class MainActivity extends AppCompatActivity {
                                     String voiceId = response.optString("voice_id", null);
                                     if (voiceId != null) {
                                         userVoiceId = voiceId;
+                                        saveUserVoiceId(voiceId);  // Save persistently
 
-                                        // Auto-enable voice identification (show as "YOU")
-                                        excludeMyVoice = false;
-                                        excludeMyVoiceSwitch.setChecked(false);
-                                        sendVoiceExclusionSetting();
-
-                                        processingStatus.setText("Voice registered! You'll show as 'YOU'");
+                                        processingStatus.setText("Voice registered! You'll show as 'WEARER'");
                                     }
                                     break;
 
@@ -633,12 +730,12 @@ public class MainActivity extends AppCompatActivity {
 
                 @Override
                 public void onClose(int code, String reason, boolean remote) {
+                    Log.i(TAG, "WebSocket closed: " + reason);
                     isConnected = false;
                     leaveConversation();
                     runOnUiThread(() -> {
                         connectionStatus.setText("Disconnected");
                         connectionStatus.setTextColor(getResources().getColor(android.R.color.holo_red_dark));
-                        // Don't override processingStatus here - let leaveConversation() handle it
                         updateButtonStates();
                     });
 
@@ -649,12 +746,11 @@ public class MainActivity extends AppCompatActivity {
                             processingStatus.setText("Reconnecting... (attempt " + reconnectAttempts + "/" + MAX_RECONNECT_ATTEMPTS + ")");
                         });
 
-                        // Delay before reconnecting
                         new Handler(Looper.getMainLooper()).postDelayed(() -> {
                             if (shouldReconnect) {
                                 setupWebSocket();
                             }
-                        }, 3000); // 3 second delay
+                        }, 3000);
                     } else if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
                         runOnUiThread(() -> {
                             processingStatus.setText("Connection lost. Please reconnect manually.");
@@ -664,6 +760,7 @@ public class MainActivity extends AppCompatActivity {
 
                 @Override
                 public void onError(Exception ex) {
+                    Log.e(TAG, "WebSocket error: " + ex.getMessage());
                     ex.printStackTrace();
                     isConnected = false;
                     leaveConversation();
@@ -675,15 +772,16 @@ public class MainActivity extends AppCompatActivity {
                     });
                 }
             };
+
             webSocketClient.connect();
+            Log.i(TAG, "Connecting to: " + SERVER_URL);
+
         } catch (Exception e) {
-            e.printStackTrace();
-            isConnected = false;
+            Log.e(TAG, "Failed to create WebSocket: " + e.getMessage());
             runOnUiThread(() -> {
                 connectionStatus.setText("Connection Failed");
                 connectionStatus.setTextColor(getResources().getColor(android.R.color.holo_red_dark));
-                processingStatus.setText("WebSocket Connection Failed: " + e.getMessage());
-                updateButtonStates();
+                processingStatus.setText("Failed to connect: " + e.getMessage());
             });
         }
     }
@@ -922,6 +1020,9 @@ public class MainActivity extends AppCompatActivity {
             if (conversationContainer != null) {
                 conversationContainer.removeAllViews();
 
+                // Clear dedupe set when conversation is cleared
+                if (seenSegments != null) seenSegments.clear();
+
                 // Add initial message
                 LinearLayout initialMessage = new LinearLayout(this);
                 initialMessage.setOrientation(LinearLayout.HORIZONTAL);
@@ -940,6 +1041,16 @@ public class MainActivity extends AppCompatActivity {
                 scrollToBottom();
             }
         });
+    }
+
+    // Create a stable key for a segment to detect duplicates
+    private String makeSegmentKey(org.json.JSONObject segment, String chunkId) {
+        double start = segment.optDouble("start_time", segment.optDouble("start", -1.0));
+        double end = segment.optDouble("end_time", segment.optDouble("end", -1.0));
+        String speaker = segment.optString("speaker_id", segment.optString("speaker", "UNKNOWN"));
+        String text = segment.optString("text", segment.optString("transcription", ""));
+        String shortText = text.length() > 40 ? text.substring(0, 40) : text;
+        return String.format("%s:%.3f-%.3f:%s:%s", chunkId == null ? "" : chunkId, start, end, speaker, shortText);
     }
 
     private void scrollToBottom() {
@@ -981,18 +1092,37 @@ public class MainActivity extends AppCompatActivity {
                     }
                 }
 
+                // Check if this is the wearer's message
+                boolean isWearerMessage = speakerId.equals("YOU");
+
+                // Create outer horizontal container for alignment
+                LinearLayout outerLayout = new LinearLayout(this);
+                outerLayout.setOrientation(LinearLayout.HORIZONTAL);
+                outerLayout.setLayoutParams(new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                ));
+
+                // Set gravity to align messages: right for wearer, left for others
+                if (isWearerMessage) {
+                    outerLayout.setGravity(android.view.Gravity.END);  // Right align
+                } else {
+                    outerLayout.setGravity(android.view.Gravity.START);  // Left align
+                }
+
                 // Create message layout - use vertical for better text display
                 LinearLayout messageLayout = new LinearLayout(this);
                 messageLayout.setOrientation(LinearLayout.VERTICAL);
                 messageLayout.setPadding(MESSAGE_PADDING_H, MESSAGE_PADDING_V,
                         MESSAGE_PADDING_H, MESSAGE_PADDING_V);
-                messageLayout.setBackgroundColor(0x10000000); // Very light background
 
-                // Set message layout to wrap content
-                messageLayout.setLayoutParams(new LinearLayout.LayoutParams(
+                // Set message layout to wrap content with max width (85% of screen)
+                LinearLayout.LayoutParams messageParams = new LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.WRAP_CONTENT,
                         LinearLayout.LayoutParams.WRAP_CONTENT
-                ));
+                );
+                messageParams.setMargins(8, 4, 8, 4);  // Add margins between messages
+                messageLayout.setLayoutParams(messageParams);
 
                 // Speaker name with color-coded labels
                 TextView speakerName = new TextView(this);
@@ -1000,28 +1130,28 @@ public class MainActivity extends AppCompatActivity {
                 int speakerColor = getResources().getColor(android.R.color.holo_blue_light);
 
                 // speaker name formatting with color coding
-                if (speakerId.equals("USER")) {
-                    // Special handling for registered user
+                if (speakerId.equals("YOU")) {
+                    // Special handling for wearer - use distinct color
                     displaySpeakerName = "YOU";
-                    int colorId = getResources().getIdentifier("user_color", "color", getPackageName());
-                    if (colorId != 0) {
-                        speakerColor = getResources().getColor(colorId);
+                    speakerColor = getResources().getColor(android.R.color.holo_green_light);  // Green for YOU
+                } else if (speakerId.equals("USER")) {
+                    // Legacy support for USER
+                    displaySpeakerName = "YOU";
+                    speakerColor = getResources().getColor(android.R.color.holo_green_light);
+                } else if (speakerId.startsWith("SPEAKER_") || speakerId.startsWith("Speaker ")) {
+                    // Other speakers
+                    if (speakerId.startsWith("SPEAKER_")) {
+                        String speakerNumber = speakerId.substring(8);
+                        displaySpeakerName = "Speaker " + speakerNumber;
+                    } else {
+                        displaySpeakerName = speakerId;
                     }
-                } else if (speakerId.startsWith("SPEAKER_")) {
-                    String speakerNumber = speakerId.substring(8);
-                    displaySpeakerName = "Speaker " + speakerNumber;
 
-                    // Get color for this speaker based on number
-                    try {
-                        int speakerNum = Integer.parseInt(speakerNumber);
-                        String colorName = "speaker_" + (speakerNum % 10); // Cycle through 10 colors
-                        int colorId = getResources().getIdentifier(colorName, "color", getPackageName());
-                        if (colorId != 0) {
-                            speakerColor = getResources().getColor(colorId);
-                        }
-                    } catch (NumberFormatException e) {
-                        // Use default color if parsing fails
-                    }
+                    // Use different colors for other speakers
+                    speakerColor = getResources().getColor(android.R.color.holo_blue_light);
+                } else {
+                    // Default for any other speaker ID
+                    displaySpeakerName = speakerId;
                 }
 
                 speakerName.setText(displaySpeakerName);
@@ -1032,10 +1162,11 @@ public class MainActivity extends AppCompatActivity {
                 speakerName.setTypeface(null, android.graphics.Typeface.BOLD);
 
                 // Set width to wrap content for speaker name
-                speakerName.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams speakerParams = new LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.WRAP_CONTENT,
                         LinearLayout.LayoutParams.WRAP_CONTENT
-                ));
+                );
+                speakerName.setLayoutParams(speakerParams);
 
                 // Add background for better visibility
                 speakerName.setBackgroundColor(getResources().getColor(R.color.speaker_name_bg));
@@ -1065,22 +1196,36 @@ public class MainActivity extends AppCompatActivity {
                 speechTextView.setSingleLine(false);
                 speechTextView.setLineSpacing(SPEECH_LINE_SPACING, SPEECH_LINE_SPACING_MULT);
 
-                // Add background for speech text
+                // Add background for speech text with different colors for wearer vs others
                 android.graphics.drawable.GradientDrawable textBg = new android.graphics.drawable.GradientDrawable();
-                textBg.setColor(getResources().getColor(R.color.speaker_text_bg));
+                if (isWearerMessage) {
+                    // Green-tinted background for wearer's messages
+                    textBg.setColor(0xFF2D5016);  // Dark green background
+                } else {
+                    // Default background for other speakers
+                    textBg.setColor(getResources().getColor(R.color.speaker_text_bg));
+                }
                 textBg.setCornerRadius(SPEECH_CORNER_RADIUS);
                 speechTextView.setBackground(textBg);
 
-                // Set width to wrap content for speech text
-                speechTextView.setLayoutParams(new LinearLayout.LayoutParams(
+                // Set width to wrap content for speech text with max width constraint
+                LinearLayout.LayoutParams speechParams = new LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.WRAP_CONTENT,
                         LinearLayout.LayoutParams.WRAP_CONTENT
-                ));
+                );
+                // Set max width to 85% of screen width for better chat bubble appearance
+                android.view.Display display = getWindowManager().getDefaultDisplay();
+                android.graphics.Point size = new android.graphics.Point();
+                display.getSize(size);
+                speechTextView.setMaxWidth((int) (size.x * 0.85));  // 85% of screen width
+                speechTextView.setLayoutParams(speechParams);
 
                 messageLayout.addView(speakerName);
                 messageLayout.addView(speechTextView);
-                conversationContainer.addView(messageLayout);
 
+                // Add message layout to outer layout, then add outer layout to container
+                outerLayout.addView(messageLayout);
+                conversationContainer.addView(outerLayout);
 
                 // Auto-scroll to bottom with better scrolling behavior
                 scrollToBottom();
@@ -1099,8 +1244,27 @@ public class MainActivity extends AppCompatActivity {
             testServerButton.setEnabled(!isConnected);
             disconnectButton.setEnabled(isConnected);
 
+            // Voice Registration button - only enabled when connected and not recording conversation
+            if (isConnected && !isRecording) {
+                voiceRegistrationButton.setEnabled(true);
+                if (isRecordingVoice) {
+                    voiceRegistrationButton.setText("Recording Voice...");
+                } else if (userVoiceId != null) {
+                    voiceRegistrationButton.setText("Re-register Voice");
+                } else {
+                    voiceRegistrationButton.setText("Register Voice");
+                }
+            } else {
+                voiceRegistrationButton.setEnabled(false);
+                if (userVoiceId != null) {
+                    voiceRegistrationButton.setText("Voice Registered");
+                } else {
+                    voiceRegistrationButton.setText("Register Voice");
+                }
+            }
+
             // Recording button states
-            if (isConnected) {
+            if (isConnected && !isRecordingVoice) {
                 if (!isRecording) {
                     requestButton.setEnabled(true);
                     requestButton.setText("Start Recording");
@@ -1194,24 +1358,6 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void sendVoiceExclusionSetting() {
-        if (webSocketClient != null && webSocketClient.isOpen()) {
-            try {
-                JSONObject message = new JSONObject();
-                message.put("type", "set_voice_exclusion");
-                message.put("exclude_voice", excludeMyVoice);
-                if (userVoiceId != null) {
-                    message.put("voice_id", userVoiceId);
-                }
-                message.put("timestamp", System.currentTimeMillis());
-
-                webSocketClient.send(message.toString());
-            } catch (JSONException e) {
-            }
-        } else {
-        }
-    }
-
     private void closeWebSocket() {
         stopClientPing(); // Stop ping when closing
         if (webSocketClient != null && webSocketClient.isOpen()) {
@@ -1226,6 +1372,210 @@ public class MainActivity extends AppCompatActivity {
             updateButtonStates();
         });
     }
+
+    private void loadUserVoiceId() {
+        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        userVoiceId = prefs.getString(PREF_USER_VOICE_ID, null);
+
+        if (userVoiceId != null) {
+            Log.i(TAG, "Loaded saved voice ID: " + userVoiceId);
+        }
+    }
+
+    private void saveUserVoiceId(String voiceId) {
+        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        SharedPreferences.Editor editor = prefs.edit();
+        editor.putString(PREF_USER_VOICE_ID, voiceId);
+        editor.apply();
+
+        Log.i(TAG, "Saved voice ID to persistent storage: " + voiceId);
+    }
+
+    // =============== VOICE REGISTRATION METHODS ===============
+
+    private void startVoiceRecording() {
+        try {
+            if (!checkAudioPermission()) {
+                processingStatus.setText("Audio permission required");
+                return;
+            }
+
+            // Clear previous recording
+            audioChunks.clear();
+            totalBytesRecorded = 0;
+            hasRecordedVoice = false;
+            recordedVoiceData = null;
+
+            isRecordingVoice = true;
+            updateButtonStates();
+            processingStatus.setText("Recording voice... Speak clearly for 5 seconds");
+
+            int bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT) * BUFFER_SIZE_MULTIPLIER;
+            if (bufferSize == AudioRecord.ERROR_BAD_VALUE || bufferSize == AudioRecord.ERROR) {
+                Log.e(TAG, "Invalid buffer size for AudioRecord: " + bufferSize);
+                return;
+            }
+
+            try {
+                audioRecorder = new AudioRecord(MediaRecorder.AudioSource.MIC, SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT, bufferSize);
+            } catch (SecurityException e) {
+                Log.e(TAG, "SecurityException when creating AudioRecord: " + e.getMessage());
+                processingStatus.setText("Audio permission denied");
+                return;
+            }
+
+            if (audioRecorder.getState() != AudioRecord.STATE_INITIALIZED) {
+                Log.e(TAG, "AudioRecorder failed to initialize");
+                audioRecorder.release();
+                audioRecorder = null;
+                return;
+            }
+
+            new Thread(() -> {
+                byte[] buffer = new byte[bufferSize];
+                long startTime = System.currentTimeMillis();
+
+                try {
+                    audioRecorder.startRecording();
+                    Log.d(TAG, "Voice recording started");
+
+                    while (isRecordingVoice && (System.currentTimeMillis() - startTime) < VOICE_RECORDING_DURATION_MS) {
+                        if (audioRecorder == null) {
+                            break;
+                        }
+
+                        int bytesRead = audioRecorder.read(buffer, 0, buffer.length);
+                        if (bytesRead < 0) {
+                            Log.e(TAG, "AudioRecord read failed: " + bytesRead);
+                            break;
+                        }
+
+                        byte[] audioChunk = new byte[bytesRead];
+                        System.arraycopy(buffer, 0, audioChunk, 0, bytesRead);
+                        audioChunks.add(audioChunk);
+                        totalBytesRecorded += bytesRead;
+
+                        // Update progress
+                        long elapsed = System.currentTimeMillis() - startTime;
+                        int progress = (int) ((elapsed * 100) / VOICE_RECORDING_DURATION_MS);
+                        runOnUiThread(() -> {
+                            processingStatus.setText("Recording voice... " + progress + "%");
+                        });
+                    }
+
+                    // Auto-stop after duration
+                    runOnUiThread(() -> {
+                        stopVoiceRecording();
+                    });
+
+                } catch (Exception e) {
+                    Log.e(TAG, "Error during voice recording: " + e.getMessage());
+                    runOnUiThread(() -> {
+                        stopVoiceRecording();
+                    });
+                }
+            }).start();
+
+        } catch (Exception e) {
+            Log.e(TAG, "Error in startVoiceRecording: " + e.getMessage());
+            processingStatus.setText("Error starting recording: " + e.getMessage());
+        }
+    }
+
+    private void stopVoiceRecording() {
+        isRecordingVoice = false;
+
+        if (audioRecorder != null) {
+            try {
+                if (audioRecorder.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) {
+                    audioRecorder.stop();
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Error stopping AudioRecorder: " + e.getMessage());
+            } finally {
+                try {
+                    audioRecorder.release();
+                } catch (Exception e) {
+                    Log.e(TAG, "Error releasing AudioRecorder: " + e.getMessage());
+                }
+                audioRecorder = null;
+            }
+        }
+
+        processRecordedVoice();
+        updateButtonStates();
+    }
+
+    private void processRecordedVoice() {
+        if (audioChunks.isEmpty()) {
+            processingStatus.setText("No audio recorded. Please try again.");
+            return;
+        }
+
+        new Thread(() -> {
+            try {
+                // Combine all audio chunks
+                byte[] completeAudio = new byte[totalBytesRecorded];
+                int offset = 0;
+                for (byte[] chunk : audioChunks) {
+                    System.arraycopy(chunk, 0, completeAudio, offset, chunk.length);
+                    offset += chunk.length;
+                }
+
+                // Create WAV header and combine with audio data
+                byte[] wavBytes = createWavBytes(completeAudio);
+                if (wavBytes != null) {
+                    recordedVoiceData = Base64.encodeToString(wavBytes, Base64.DEFAULT);
+                    hasRecordedVoice = true;
+
+                    runOnUiThread(() -> {
+                        processingStatus.setText("Voice recorded! Registering with server...");
+                        registerVoiceWithServer();
+                    });
+                } else {
+                    runOnUiThread(() -> {
+                        processingStatus.setText("Failed to process audio. Please try again.");
+                    });
+                }
+
+            } catch (Exception e) {
+                Log.e(TAG, "Error processing recorded voice: " + e.getMessage());
+                runOnUiThread(() -> {
+                    processingStatus.setText("Error processing audio: " + e.getMessage());
+                });
+            }
+        }).start();
+    }
+
+    private void registerVoiceWithServer() {
+        if (!isConnected || recordedVoiceData == null) {
+            processingStatus.setText("Not connected or no voice data");
+            return;
+        }
+
+        isProcessing.set(true);
+        updateButtonStates();
+        processingStatus.setText("Registering voice with server...");
+
+        try {
+            JSONObject message = new JSONObject();
+            message.put("type", "register_voice");
+            message.put("voice_data", recordedVoiceData);
+            message.put("sample_rate", SAMPLE_RATE);
+            message.put("timestamp", System.currentTimeMillis());
+
+            webSocketClient.send(message.toString());
+            Log.i(TAG, "Voice registration request sent to server");
+
+        } catch (JSONException e) {
+            Log.e(TAG, "Failed to create registration message: " + e.getMessage());
+            isProcessing.set(false);
+            updateButtonStates();
+            processingStatus.setText("Failed to create registration message");
+        }
+    }
+
+    // =============== END VOICE REGISTRATION METHODS ===============
 
     @Override
     protected void onDestroy() {
