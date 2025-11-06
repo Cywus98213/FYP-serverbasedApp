@@ -64,6 +64,8 @@ public class MainActivity extends AppCompatActivity {
     private boolean shouldReconnect = true; // Auto-reconnect flag
     private int reconnectAttempts = 0;
     private static final int MAX_RECONNECT_ATTEMPTS = 5;
+    private long lastReconnectTime = 0; // Track last reconnect to prevent loops
+    private static final long MIN_RECONNECT_INTERVAL_MS = 5000; // Min 5 seconds between reconnects
     private Handler pingHandler = new Handler(Looper.getMainLooper());
     private Runnable pingRunnable;
     private AudioRecord audioRecorder;
@@ -186,10 +188,9 @@ public class MainActivity extends AppCompatActivity {
 
         testServerButton.setOnClickListener(v -> {
             if (!isConnected) {
-                shouldReconnect = true; // Enable auto-reconnect when user manually connects
-                reconnectAttempts = 0; // Reset attempts
+                Log.i(TAG, "Manual reconnect requested");
                 reconnectWebSocket();
-                processingStatus.setText("Trying to reconnect...");
+                processingStatus.setText("Connecting to server...");
             } else {
                 sendPingMessage();
                 processingStatus.setText("Manual ping sent to server...");
@@ -213,7 +214,7 @@ public class MainActivity extends AppCompatActivity {
         });
 
         disconnectButton.setOnClickListener(v -> {
-            shouldReconnect = false; // Disable auto-reconnect when user manually disconnects
+            Log.i(TAG, "Manual disconnect requested");
             stopClientPing(); // Stop ping when disconnecting
             leaveConversation();
             closeWebSocket();
@@ -577,10 +578,28 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void reconnectWebSocket() {
-        if (webSocketClient != null && webSocketClient.isOpen()) {
-            webSocketClient.close();
+        Log.i(TAG, "Reconnecting WebSocket...");
+
+        // Properly close existing connection
+        if (webSocketClient != null) {
+            try {
+                stopClientPing(); // Stop ping first
+                if (webSocketClient.isOpen()) {
+                    Log.i(TAG, "Closing existing connection before reconnect");
+                    webSocketClient.close();
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Error closing WebSocket during reconnect: " + e.getMessage());
+            }
+            webSocketClient = null;
         }
-        setupWebSocket();
+
+        isConnected = false;
+
+        // Small delay to ensure old connection is fully closed
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            setupWebSocket();
+        }, 500); // 500ms delay
     }
 
     @Override
@@ -596,17 +615,42 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private boolean isConnecting = false; // Prevent multiple simultaneous connections
+
     private void setupWebSocket() {
+        // Prevent connection spam
+        if (isConnecting) {
+            Log.w(TAG, "Already connecting, ignoring duplicate setupWebSocket call");
+            return;
+        }
+
         try {
+            isConnecting = true;
+
+            // Close existing connection if any
+            if (webSocketClient != null) {
+                Log.i(TAG, "Closing existing WebSocket before creating new one");
+                try {
+                    if (webSocketClient.isOpen()) {
+                        webSocketClient.close();
+                    }
+                } catch (Exception e) {
+                    Log.w(TAG, "Error closing old WebSocket: " + e.getMessage());
+                }
+                webSocketClient = null;
+            }
+
             URI serverUri = new URI(SERVER_URL);
 
             webSocketClient = new WebSocketClient(serverUri) {
                 @Override
                 public void onOpen(ServerHandshake handshake) {
-                    Log.i(TAG, "WebSocket connected");
+                    Log.i(TAG, "========== WebSocket OPENED ==========");
+                    Log.i(TAG, "Connection state - isConnected: " + isConnected + ", isOpen: " + isOpen());
                     isConnected = true;
-                    reconnectAttempts = 0;
+                    isConnecting = false; // Connection established
 
+                    // Start keep-alive pings (20 second interval)
                     startClientPing();
 
                     // Send join_conversation message to initialize session with server
@@ -683,22 +727,20 @@ public class MainActivity extends AppCompatActivity {
                                         } else {
                                             speakerName = speaker;
                                         }
-                                        int segmentNumber = segment.optInt("segment_number", 0);
 
-
-                                        if (isValidSpeech(text)) {
-                                            String key = makeSegmentKey(segment, response.optString("chunk_id", null));
-                                            if (!seenSegments.contains(key)) {
-                                                seenSegments.add(key);
-                                                addMessageToConversation(speakerName, text);
-                                            } else {
-                                                // Duplicate - ignore
-                                            }
+                                        // Add message (no validation needed)
+                                        String key = makeSegmentKey(segment, response.optString("chunk_id", null));
+                                        if (!seenSegments.contains(key)) {
+                                            seenSegments.add(key);
+                                            addMessageToConversation(speakerName, text);
+                                            Log.d(TAG, "Added message - " + speakerName + ": " + text);
                                         } else {
+                                            Log.d(TAG, "Duplicate segment ignored - " + key);
                                         }
 
                                     } catch (JSONException e) {
                                         processingStatus.setText("Error parsing server response");
+                                        Log.e(TAG, "Error parsing segment_result: " + e.getMessage());
                                     }
                                     break;
 
@@ -725,12 +767,11 @@ public class MainActivity extends AppCompatActivity {
                                                     speakerName = speaker;
                                                 }
 
-                                                if (isValidSpeech(text)) {
-                                                    String key = makeSegmentKey(segment, response.optString("chunk_id", null));
-                                                    if (!seenSegments.contains(key)) {
-                                                        seenSegments.add(key);
-                                                        addMessageToConversation(speakerName, text);
-                                                    }
+                                                // Add message (no validation needed)
+                                                String key = makeSegmentKey(segment, response.optString("chunk_id", null));
+                                                if (!seenSegments.contains(key)) {
+                                                    seenSegments.add(key);
+                                                    addMessageToConversation(speakerName, text);
                                                 }
                                             }
                                         }
@@ -766,12 +807,34 @@ public class MainActivity extends AppCompatActivity {
                                 case "voice_registered":
                                     // Handle voice registration from VoiceRegistrationActivity
                                     String voiceId = response.optString("voice_id", null);
+                                    int numSamples = response.optInt("num_samples", 1);
+                                    String regMethod = response.optString("registration_method", "single");
+
                                     if (voiceId != null) {
                                         userVoiceId = voiceId;
                                         saveUserVoiceId(voiceId);  // Save persistently
 
-                                        processingStatus.setText("Voice registered! You'll show as 'WEARER'");
+                                        if ("multi-sample".equals(regMethod)) {
+                                            processingStatus.setText("Voice registered with " + numSamples + " samples (Robust)");
+                                        } else {
+                                            processingStatus.setText("Voice registered! You'll show as 'WEARER'");
+                                        }
                                     }
+                                    break;
+
+                                case "processing_error":
+                                    try {
+                                        String error = response.getString("error");
+                                        String chunkId = response.optString("chunk_id", "");
+                                        processingStatus.setText("Processing Error: " + error);
+                                        connectionStatus.setText("Connected");
+                                        connectionStatus.setTextColor(getResources().getColor(android.R.color.holo_green_dark));
+                                        Log.e(TAG, "Server processing error for chunk " + chunkId + ": " + error);
+                                    } catch (JSONException e) {
+                                        processingStatus.setText("Unknown processing error occurred");
+                                    }
+                                    isProcessing.set(false);
+                                    updateButtonStates();
                                     break;
 
                                 case "error":
@@ -799,8 +862,11 @@ public class MainActivity extends AppCompatActivity {
 
                 @Override
                 public void onClose(int code, String reason, boolean remote) {
-                    Log.i(TAG, "WebSocket closed: " + reason);
+                    Log.i(TAG, "========== WebSocket CLOSED ==========");
+                    Log.i(TAG, "Close Code: " + code + ", Reason: " + reason + ", Remote: " + remote);
+                    Log.i(TAG, "Connection state before - isConnected: " + isConnected + ", isOpen: " + isOpen());
                     isConnected = false;
+                    isConnecting = false; // Reset connecting flag
                     leaveConversation();
                     runOnUiThread(() -> {
                         connectionStatus.setText("Disconnected");
@@ -808,30 +874,21 @@ public class MainActivity extends AppCompatActivity {
                         updateButtonStates();
                     });
 
-                    // Auto-reconnect if needed
-                    if (shouldReconnect && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-                        reconnectAttempts++;
-                        runOnUiThread(() -> {
-                            processingStatus.setText("Reconnecting... (attempt " + reconnectAttempts + "/" + MAX_RECONNECT_ATTEMPTS + ")");
-                        });
-
-                        new Handler(Looper.getMainLooper()).postDelayed(() -> {
-                            if (shouldReconnect) {
-                                setupWebSocket();
-                            }
-                        }, 3000);
-                    } else if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-                        runOnUiThread(() -> {
-                            processingStatus.setText("Connection lost. Please reconnect manually.");
-                        });
-                    }
+                    // No auto-reconnect - keep-alive pings should maintain connection
+                    // If connection is lost, user should manually reconnect
+                    Log.i(TAG, "Connection closed - no auto-reconnect (use keep-alive pings instead)");
+                    runOnUiThread(() -> {
+                        processingStatus.setText("Connection lost. Click 'Test Server' to reconnect.");
+                    });
                 }
 
                 @Override
                 public void onError(Exception ex) {
-                    Log.e(TAG, "WebSocket error: " + ex.getMessage());
+                    Log.e(TAG, "========== WebSocket ERROR ==========");
+                    Log.e(TAG, "Error: " + ex.getMessage());
                     ex.printStackTrace();
                     isConnected = false;
+                    isConnecting = false; // Reset connecting flag
                     leaveConversation();
                     runOnUiThread(() -> {
                         connectionStatus.setText("Error");
@@ -842,10 +899,12 @@ public class MainActivity extends AppCompatActivity {
                 }
             };
 
+            Log.i(TAG, "Creating new WebSocket connection to: " + SERVER_URL);
             webSocketClient.connect();
-            Log.i(TAG, "Connecting to: " + SERVER_URL);
+            Log.i(TAG, "Connection initiated");
 
         } catch (Exception e) {
+            isConnecting = false; // Reset on error
             Log.e(TAG, "Failed to create WebSocket: " + e.getMessage());
             runOnUiThread(() -> {
                 connectionStatus.setText("Connection Failed");
@@ -985,40 +1044,6 @@ public class MainActivity extends AppCompatActivity {
 
         // Process and send the recorded audio
         processAndSendAudio();
-    }
-
-    // Android-side speech validation
-    private boolean isValidSpeech(String text) {
-        if (text == null || text.trim().isEmpty()) {
-            return false;
-        }
-
-        String cleanText = text.trim().toLowerCase();
-
-        // Filter out common background noise patterns
-        String[] noisePatterns = {
-                "um", "uh", "ah", "eh", "oh", "mm", "hmm",
-                "background", "noise", "static", "silence",
-                "breathing", "cough", "sigh", "yawn"
-        };
-
-        for (String pattern : noisePatterns) {
-            if (cleanText.equals(pattern)) {
-                return false;
-            }
-        }
-
-        // Filter out very short text (be more lenient with Cantonese)
-        if (cleanText.length() < 1) {
-            return false;
-        }
-
-        // Filter out repetitive characters
-        if (cleanText.matches("(.)\\1{2,}")) {
-            return false;
-        }
-
-        return true;
     }
 
     private void processAndSendAudio() {
@@ -1309,6 +1334,13 @@ public class MainActivity extends AppCompatActivity {
 
     private void updateButtonStates() {
         runOnUiThread(() -> {
+            // Sync isConnected with actual WebSocket state
+            boolean actuallyConnected = webSocketClient != null && webSocketClient.isOpen();
+            if (actuallyConnected != isConnected) {
+                Log.w(TAG, "Connection state mismatch! isConnected=" + isConnected + ", actuallyConnected=" + actuallyConnected);
+                isConnected = actuallyConnected; // Sync the state
+            }
+
             // Connection button states
             testServerButton.setEnabled(!isConnected);
             disconnectButton.setEnabled(isConnected);
@@ -1429,9 +1461,23 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void closeWebSocket() {
+        Log.i(TAG, "Closing WebSocket connection...");
         stopClientPing(); // Stop ping when closing
-        if (webSocketClient != null && webSocketClient.isOpen()) {
-            webSocketClient.close();
+
+        if (webSocketClient != null) {
+            try {
+                if (webSocketClient.isOpen()) {
+                    Log.i(TAG, "WebSocket is open, closing now");
+                    webSocketClient.close();
+                } else {
+                    Log.i(TAG, "WebSocket already closed");
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Error closing WebSocket: " + e.getMessage());
+            }
+            webSocketClient = null;
+        } else {
+            Log.i(TAG, "WebSocket is null, nothing to close");
         }
 
         isConnected = false;
