@@ -17,6 +17,11 @@ import android.widget.Switch;
 import android.content.Intent;
 import android.os.Handler;
 import android.os.Looper;
+import android.app.AlertDialog;
+import android.content.DialogInterface;
+import android.widget.RadioGroup;
+import android.widget.RadioButton;
+import android.view.ViewGroup;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
@@ -98,6 +103,9 @@ public class MainActivity extends AppCompatActivity {
     private ScrollView chatScrollView;
     private Button requestButton, stopButton, testServerButton, disconnectButton;
     private Button voiceRegistrationButton;
+
+    // speaker diaruzatui language(default to zh)
+    private String translate_Lang = "zh";
 
     // Simple speaker tracking
     private int speakerCount = 0;
@@ -210,6 +218,66 @@ public class MainActivity extends AppCompatActivity {
             leaveConversation();
             closeWebSocket();
         });
+
+        // Translation language selector
+        LinearLayout languageRow = new LinearLayout(this);
+        languageRow.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        rowParams.topMargin = 16;
+        languageRow.setLayoutParams(rowParams);
+
+        TextView langLabel = new TextView(this);
+        langLabel.setText("Language for translation");
+        langLabel.setTextSize(14f);
+        languageRow.addView(langLabel);
+
+        RadioGroup langGroup = new RadioGroup(this);
+        langGroup.setOrientation(RadioGroup.HORIZONTAL);
+
+        RadioButton rbCantonese = new RadioButton(this);
+        rbCantonese.setText("Cantonese");
+        rbCantonese.setId(View.generateViewId());
+        langGroup.addView(rbCantonese);
+
+        RadioButton rbEnglish = new RadioButton(this);
+        rbEnglish.setText("English");
+        rbEnglish.setId(View.generateViewId());
+        langGroup.addView(rbEnglish);
+
+        // Initialize selection based on current translate_Lang
+        if ("en".equalsIgnoreCase(translate_Lang)) {
+            rbEnglish.setChecked(true);
+        } else {
+            // default to Cantonese
+            rbCantonese.setChecked(true);
+            translate_Lang = "yue"; // ensure we use Cantonese code
+        }
+
+        langGroup.setOnCheckedChangeListener((group, checkedId) -> {
+            if (checkedId == rbEnglish.getId()) {
+                translate_Lang = "en";
+            } else if (checkedId == rbCantonese.getId()) {
+                translate_Lang = "yue";
+            }
+            processingStatus.setText("Language set to: " + ("en".equals(translate_Lang) ? "English" : "Cantonese") + " (" + translate_Lang + ")");
+            if (isConnected && webSocketClient != null && webSocketClient.isOpen()) {
+                sendJoinConversationMessage();
+            }
+        });
+
+        languageRow.addView(langGroup);
+
+        // Place the selector below the existing buttons by adding to the same parent layout
+        View buttonsParent = (View) requestButton.getParent();
+        if (buttonsParent instanceof LinearLayout) {
+            ((LinearLayout) buttonsParent).addView(languageRow);
+        } else {
+            // Fallback: attach to conversation container if buttons' parent isn't linear
+            conversationContainer.addView(languageRow, 0);
+        }
 
         voiceRegistrationButton.setOnClickListener(v -> {
             if (checkAudioPermission()) {
@@ -457,6 +525,7 @@ public class MainActivity extends AppCompatActivity {
             try {
                 JSONObject joinMessage = new JSONObject();
                 joinMessage.put("type", "join_conversation");
+                joinMessage.put("translation_language", translate_Lang);
                 joinMessage.put("timestamp", System.currentTimeMillis());
                 webSocketClient.send(joinMessage.toString());
                 Log.i(TAG, "Sent join_conversation message to server");
@@ -1336,6 +1405,7 @@ public class MainActivity extends AppCompatActivity {
                 message.put("timestamp", System.currentTimeMillis());
                 message.put("format", "wav");
                 message.put("sample_rate", SAMPLE_RATE);
+                message.put("translation_language", translate_Lang);
 
                 webSocketClient.send(message.toString());
 
