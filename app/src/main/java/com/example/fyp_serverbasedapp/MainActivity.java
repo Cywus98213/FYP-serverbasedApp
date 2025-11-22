@@ -76,10 +76,13 @@ public class MainActivity extends AppCompatActivity {
     private static final int AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT;
     private static final int BUFFER_SIZE_MULTIPLIER = 4; // Increased buffer size
 
+    // Real-time chunk parameters
+    private static final int CHUNK_INTERVAL_MS = 3000; // Send chunks every 3 seconds
+    private static final int BYTES_PER_SECOND = SAMPLE_RATE * 2; // 16-bit = 2 bytes per sample, mono
+    private static final int CHUNK_SIZE_BYTES = (CHUNK_INTERVAL_MS * BYTES_PER_SECOND) / 1000; // ~96KB for 3 seconds
 
     private static final int MIN_RECORDING_DURATION_MS = 300; // Catch very quick speech
     private static final int OVERLAP_DURATION_MS = 500; // More overlap to prevent cutting
-
 
     // Audio data collection with buffering - Minimize downtime
     private List<byte[]> audioChunks = new ArrayList<>();
@@ -87,6 +90,11 @@ public class MainActivity extends AppCompatActivity {
     private int totalBytesRecorded = 0;
     private long lastSpeechTime = 0;
     private long recordingStartTime = 0;
+
+    // Real-time chunk tracking
+    private List<byte[]> currentChunkBuffer = new ArrayList<>(); // Buffer for current 3-second chunk
+    private int currentChunkBytes = 0; // Bytes in current chunk
+    private Handler chunkHandler = new Handler(Looper.getMainLooper()); // Handler for chunk timer
 
     private boolean hasDetectedSpeech = false;
 
@@ -976,6 +984,23 @@ public class MainActivity extends AppCompatActivity {
                     return;
                 }
 
+                // Reset chunk tracking
+                currentChunkBuffer.clear();
+                currentChunkBytes = 0;
+                recordingStartTime = System.currentTimeMillis();
+
+                // Start chunk timer - send chunks every 3 seconds
+                chunkHandler.postDelayed(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (isRecording && isInConversation) {
+                            sendRealTimeChunk();
+                            // Schedule next chunk
+                            chunkHandler.postDelayed(this, CHUNK_INTERVAL_MS);
+                        }
+                    }
+                }, CHUNK_INTERVAL_MS);
+
                 int totalBytesRead = 0;
                 int chunkCount = 0;
 
@@ -997,11 +1022,17 @@ public class MainActivity extends AppCompatActivity {
                     byte[] audioChunk = new byte[bytesRead];
                     System.arraycopy(buffer, 0, audioChunk, 0, bytesRead);
 
-                    // Add to buffer for processing
+                    // Add to main buffer (for final processing)
                     try {
                         audioBuffer.put(audioChunk);
                     } catch (InterruptedException e) {
                         break;
+                    }
+
+                    // Also add to current chunk buffer for real-time processing
+                    synchronized (currentChunkBuffer) {
+                        currentChunkBuffer.add(audioChunk);
+                        currentChunkBytes += bytesRead;
                     }
 
                     // Log every 50 chunks to avoid spam
@@ -1009,6 +1040,13 @@ public class MainActivity extends AppCompatActivity {
                     }
                 }
 
+                // Stop chunk timer
+                chunkHandler.removeCallbacksAndMessages(null);
+
+                // Send any remaining audio as final chunk
+                if (currentChunkBytes > 0) {
+                    sendRealTimeChunk();
+                }
 
             }).start();
         } catch (Exception e) {
@@ -1019,6 +1057,9 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void stopSingleRecording() {
+        // Stop chunk timer
+        chunkHandler.removeCallbacksAndMessages(null);
+
         if (audioRecorder != null) {
             try {
                 if (audioRecorder.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) {
@@ -1038,12 +1079,18 @@ public class MainActivity extends AppCompatActivity {
         isRecording = false;
         isRecordingState = false;
         runOnUiThread(() -> {
-            processingStatus.setText("Sending audio to server...");
+            processingStatus.setText("Sending final audio to server...");
         });
         updateButtonStates();
 
-        // Process and send the recorded audio
+        // Process and send the final recorded audio (full audio, not chunk)
         processAndSendAudio();
+
+        // Clear chunk buffer
+        synchronized (currentChunkBuffer) {
+            currentChunkBuffer.clear();
+            currentChunkBytes = 0;
+        }
     }
 
     private void processAndSendAudio() {
@@ -1424,11 +1471,56 @@ public class MainActivity extends AppCompatActivity {
         };
     }
 
+    private void sendRealTimeChunk() {
+        // Send accumulated chunk buffer as real-time chunk
+        synchronized (currentChunkBuffer) {
+            if (currentChunkBuffer.isEmpty() || currentChunkBytes == 0) {
+                return;
+            }
+
+            // Combine chunk buffer into single array
+            byte[] chunkAudio = new byte[currentChunkBytes];
+            int offset = 0;
+            for (byte[] chunk : currentChunkBuffer) {
+                System.arraycopy(chunk, 0, chunkAudio, offset, chunk.length);
+                offset += chunk.length;
+            }
+
+            // Clear chunk buffer for next chunk
+            currentChunkBuffer.clear();
+            currentChunkBytes = 0;
+
+            // Send chunk in background thread
+            new Thread(() -> {
+                try {
+                    // Create WAV header and combine with audio data
+                    byte[] wavBytes = createWavBytes(chunkAudio);
+                    if (wavBytes == null) {
+                        return;
+                    }
+
+                    // Convert to base64
+                    String base64Audio = Base64.encodeToString(wavBytes, Base64.DEFAULT);
+
+                    // Send as real-time chunk
+                    sendWavAudioToServer(base64Audio, true);
+
+                } catch (Exception e) {
+                    Log.e(TAG, "Error sending real-time chunk: " + e.getMessage());
+                }
+            }).start();
+        }
+    }
+
     private void sendWavAudioToServer(String base64Audio) {
+        sendWavAudioToServer(base64Audio, false);
+    }
+
+    private void sendWavAudioToServer(String base64Audio, boolean isChunk) {
         if (webSocketClient != null && webSocketClient.isOpen()) {
             try {
                 audioSentCount++;
-                String chunkId = "android_wav_" + System.currentTimeMillis();
+                String chunkId = (isChunk ? "chunk_" : "android_wav_") + System.currentTimeMillis();
 
                 JSONObject message = new JSONObject();
                 message.put("type", "audio_from_glasses");
@@ -1438,12 +1530,17 @@ public class MainActivity extends AppCompatActivity {
                 message.put("format", "wav");
                 message.put("sample_rate", SAMPLE_RATE);
                 message.put("translation_language", translate_Lang);
+                message.put("is_chunk", isChunk); // Mark as real-time chunk
 
                 webSocketClient.send(message.toString());
 
                 // Update status to show audio sent
                 runOnUiThread(() -> {
-                    processingStatus.setText("Audio sent to server - Processing...");
+                    if (isChunk) {
+                        processingStatus.setText("Real-time processing...");
+                    } else {
+                        processingStatus.setText("Audio sent to server - Processing...");
+                    }
                 });
 
             } catch (JSONException e) {
