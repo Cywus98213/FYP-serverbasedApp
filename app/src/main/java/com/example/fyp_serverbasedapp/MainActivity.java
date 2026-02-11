@@ -54,7 +54,7 @@ public class MainActivity extends AppCompatActivity {
     private static final String PREF_USER_VOICE_ID = "userVoiceId";
 
     // WebSocket configuration
-    private static final String SERVER_URL = "ws://192.168.0.112:8000";
+    private static final String SERVER_URL = "wss://jovani-unbanded-benjamin.ngrok-free.dev";
     private WebSocketClient webSocketClient;
     private static final int RECORD_AUDIO_PERMISSION_CODE = 1;
     private boolean isRecording = false;
@@ -123,6 +123,11 @@ public class MainActivity extends AppCompatActivity {
     // Keep track of segments we've already displayed to avoid duplicates
     private Set<String> seenSegments;
 
+    // Track recent segments by timestamp to prevent duplicates from overlapping chunks
+    // Format: "speaker:start:end:text" -> timestamp when seen
+    private java.util.Map<String, Long> recentSegments;
+    private static final long DEDUP_WINDOW_MS = 5000; // 5 second window for duplicate detection
+
     // Voice registration settings
     private String userVoiceId = null;
 
@@ -173,8 +178,9 @@ public class MainActivity extends AppCompatActivity {
         disconnectButton = findViewById(R.id.disconnectButton);
         voiceRegistrationButton = findViewById(R.id.voiceRegistrationButton);
 
-        // Initialize dedupe set
+        // Initialize dedupe sets
         seenSegments = Collections.synchronizedSet(new HashSet<String>());
+        recentSegments = Collections.synchronizedMap(new java.util.HashMap<String, Long>());
 
         // Set initial states
         updateButtonStates();
@@ -508,18 +514,21 @@ public class MainActivity extends AppCompatActivity {
         // Stop any existing ping
         stopClientPing();
 
-        // Start new ping every 20 seconds
+        // Start new ping every 10 seconds (more frequent for tunnel services like ngrok)
         pingRunnable = new Runnable() {
             @Override
             public void run() {
                 if (isConnected && webSocketClient != null && webSocketClient.isOpen()) {
                     sendPingMessage();
                     // Schedule next ping
-                    pingHandler.postDelayed(this, 20000); // 20 seconds
+                    pingHandler.postDelayed(this, 10000); // 10 seconds (more frequent for tunnels)
+                } else {
+                    Log.w(TAG, "Ping handler: Connection not open, stopping ping");
                 }
             }
         };
-        pingHandler.postDelayed(pingRunnable, 20000); // Start first ping after 20 seconds
+        // Start first ping immediately to keep connection alive right away
+        pingHandler.postDelayed(pingRunnable, 2000); // Start first ping after 2 seconds (immediate keep-alive)
     }
 
     private void stopClientPing() {
@@ -551,10 +560,15 @@ public class MainActivity extends AppCompatActivity {
                 pingMessage.put("type", "ping");
                 pingMessage.put("timestamp", System.currentTimeMillis());
                 webSocketClient.send(pingMessage.toString());
+                Log.d(TAG, "Sent ping to server");
                 // Don't update UI for automatic pings
             } catch (JSONException e) {
                 Log.e(TAG, "Failed to send ping: " + e.getMessage());
+            } catch (Exception e) {
+                Log.e(TAG, "Error sending ping: " + e.getMessage());
             }
+        } else {
+            Log.w(TAG, "Cannot send ping - WebSocket not open");
         }
     }
 
@@ -658,7 +672,7 @@ public class MainActivity extends AppCompatActivity {
                     isConnected = true;
                     isConnecting = false; // Connection established
 
-                    // Start keep-alive pings (20 second interval)
+                    // Start keep-alive pings (10 second interval for tunnel services)
                     startClientPing();
 
                     // Send join_conversation message to initialize session with server
@@ -712,6 +726,10 @@ public class MainActivity extends AppCompatActivity {
                                     processingStatus.setText("Processing on server... (working)");
                                     // Restart client ping so the handler doesn't trigger a reconnect while server is busy
                                     startClientPing();
+                                    // Also send a ping immediately to keep connection alive
+                                    if (isConnected && webSocketClient != null && webSocketClient.isOpen()) {
+                                        sendPingMessage();
+                                    }
                                     break;
 
                                 case "segment_result":
@@ -736,14 +754,12 @@ public class MainActivity extends AppCompatActivity {
                                             speakerName = speaker;
                                         }
 
-                                        // Add message (no validation needed)
-                                        String key = makeSegmentKey(segment, response.optString("chunk_id", null));
-                                        if (!seenSegments.contains(key)) {
-                                            seenSegments.add(key);
+                                        // Check for duplicates using improved deduplication
+                                        if (!isDuplicateSegment(segment)) {
                                             addMessageToConversation(speakerName, text);
                                             Log.d(TAG, "Added message - " + speakerName + ": " + text);
                                         } else {
-                                            Log.d(TAG, "Duplicate segment ignored - " + key);
+                                            Log.d(TAG, "Duplicate segment ignored - " + speakerName + ": " + text.substring(0, Math.min(30, text.length())));
                                         }
 
                                     } catch (JSONException e) {
@@ -775,10 +791,8 @@ public class MainActivity extends AppCompatActivity {
                                                     speakerName = speaker;
                                                 }
 
-                                                // Add message (no validation needed)
-                                                String key = makeSegmentKey(segment, response.optString("chunk_id", null));
-                                                if (!seenSegments.contains(key)) {
-                                                    seenSegments.add(key);
+                                                // Check for duplicates using improved deduplication
+                                                if (!isDuplicateSegment(segment)) {
                                                     addMessageToConversation(speakerName, text);
                                                 }
                                             }
@@ -873,6 +887,10 @@ public class MainActivity extends AppCompatActivity {
                     Log.i(TAG, "========== WebSocket CLOSED ==========");
                     Log.i(TAG, "Close Code: " + code + ", Reason: " + reason + ", Remote: " + remote);
                     Log.i(TAG, "Connection state before - isConnected: " + isConnected + ", isOpen: " + isOpen());
+
+                    // Stop ping when connection closes
+                    stopClientPing();
+
                     isConnected = false;
                     isConnecting = false; // Reset connecting flag
                     leaveConversation();
@@ -882,12 +900,37 @@ public class MainActivity extends AppCompatActivity {
                         updateButtonStates();
                     });
 
-                    // No auto-reconnect - keep-alive pings should maintain connection
-                    // If connection is lost, user should manually reconnect
-                    Log.i(TAG, "Connection closed - no auto-reconnect (use keep-alive pings instead)");
-                    runOnUiThread(() -> {
-                        processingStatus.setText("Connection lost. Click 'Test Server' to reconnect.");
-                    });
+                    // Log close code details for debugging
+                    if (code == 1006) {
+                        Log.w(TAG, "Abnormal closure (1006) - usually means connection timeout or network issue");
+                        Log.w(TAG, "This might be due to:");
+                        Log.w(TAG, "  - Tunnel timeout (ngrok free tier)");
+                        Log.w(TAG, "  - Network interruption");
+                        Log.w(TAG, "  - Server not responding to pings");
+                    }
+
+                    // Auto-reconnect for unexpected disconnects (not manual disconnects)
+                    // Only reconnect if it was an unexpected closure (code 1006 = abnormal closure)
+                    // and we're not already trying to reconnect
+                    if (code == 1006 && !isConnecting && shouldReconnect) {
+                        Log.i(TAG, "Unexpected disconnect detected - attempting auto-reconnect...");
+                        runOnUiThread(() -> {
+                            processingStatus.setText("Connection lost. Reconnecting...");
+                        });
+
+                        // Wait a bit before reconnecting to avoid immediate retry loops
+                        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                            if (!isConnected && !isConnecting) {
+                                Log.i(TAG, "Auto-reconnecting...");
+                                reconnectWebSocket();
+                            }
+                        }, 3000); // Wait 3 seconds before reconnecting
+                    } else {
+                        Log.i(TAG, "Connection closed - manual disconnect or reconnect disabled");
+                        runOnUiThread(() -> {
+                            processingStatus.setText("Connection lost. Click 'Test Server' to reconnect.");
+                        });
+                    }
                 }
 
                 @Override
@@ -984,17 +1027,23 @@ public class MainActivity extends AppCompatActivity {
                     return;
                 }
 
-                // Reset chunk tracking
+                // Reset chunk tracking - start fresh for real-time processing
                 currentChunkBuffer.clear();
                 currentChunkBytes = 0;
                 recordingStartTime = System.currentTimeMillis();
 
-                // Start chunk timer - send chunks every 3 seconds
+                // Start chunk timer - send chunks every 3 seconds with NO overlap
+                // For real-time, we want clean boundaries even if speech is cut off
                 chunkHandler.postDelayed(new Runnable() {
                     @Override
                     public void run() {
                         if (isRecording && isInConversation) {
                             sendRealTimeChunk();
+                            // Clear buffer immediately after sending to prevent overlap
+                            synchronized (currentChunkBuffer) {
+                                currentChunkBuffer.clear();
+                                currentChunkBytes = 0;
+                            }
                             // Schedule next chunk
                             chunkHandler.postDelayed(this, CHUNK_INTERVAL_MS);
                         }
@@ -1161,8 +1210,9 @@ public class MainActivity extends AppCompatActivity {
             if (conversationContainer != null) {
                 conversationContainer.removeAllViews();
 
-                // Clear dedupe set when conversation is cleared
+                // Clear dedupe sets when conversation is cleared
                 if (seenSegments != null) seenSegments.clear();
+                if (recentSegments != null) recentSegments.clear();
 
                 // Add initial message
                 LinearLayout initialMessage = new LinearLayout(this);
@@ -1185,13 +1235,47 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // Create a stable key for a segment to detect duplicates
+    // NOTE: chunkId is NOT included to allow deduplication across overlapping chunks
     private String makeSegmentKey(org.json.JSONObject segment, String chunkId) {
         double start = segment.optDouble("start_time", segment.optDouble("start", -1.0));
         double end = segment.optDouble("end_time", segment.optDouble("end", -1.0));
         String speaker = segment.optString("speaker_id", segment.optString("speaker", "UNKNOWN"));
         String text = segment.optString("text", segment.optString("transcription", ""));
-        String shortText = text.length() > 40 ? text.substring(0, 40) : text;
-        return String.format("%s:%.3f-%.3f:%s:%s", chunkId == null ? "" : chunkId, start, end, speaker, shortText);
+        // Use full text for better matching (not truncated)
+        // Round timestamps to 0.1s precision to handle slight variations in overlapping chunks
+        double roundedStart = Math.round(start * 10.0) / 10.0;
+        double roundedEnd = Math.round(end * 10.0) / 10.0;
+        // Key format: speaker:roundedStart:roundedEnd:text (NO chunkId)
+        return String.format("%s:%.1f:%.1f:%s", speaker, roundedStart, roundedEnd, text);
+    }
+
+    // Check if segment is a duplicate using time-based sliding window
+    private boolean isDuplicateSegment(org.json.JSONObject segment) {
+        String key = makeSegmentKey(segment, null); // chunkId not needed for deduplication
+        long currentTime = System.currentTimeMillis();
+
+        // Check if we've seen this exact segment recently
+        if (recentSegments.containsKey(key)) {
+            long lastSeenTime = recentSegments.get(key);
+            if (currentTime - lastSeenTime < DEDUP_WINDOW_MS) {
+                // Seen within the window - it's a duplicate
+                return true;
+            }
+        }
+
+        // Also check the seenSegments set (for exact matches)
+        if (seenSegments.contains(key)) {
+            return true;
+        }
+
+        // Not a duplicate - add to tracking
+        recentSegments.put(key, currentTime);
+        seenSegments.add(key);
+
+        // Clean up old entries from recentSegments (older than window)
+        recentSegments.entrySet().removeIf(entry -> currentTime - entry.getValue() > DEDUP_WINDOW_MS);
+
+        return false;
     }
 
     private void scrollToBottom() {
