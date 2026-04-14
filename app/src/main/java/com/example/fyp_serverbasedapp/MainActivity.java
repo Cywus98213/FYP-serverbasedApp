@@ -1,6 +1,7 @@
 package com.example.fyp_serverbasedapp;
 
 import android.Manifest;
+import android.content.Context;
 import android.content.pm.PackageManager;
 import android.content.pm.ActivityInfo;
 import android.content.SharedPreferences;
@@ -72,6 +73,11 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.lang.Thread;
 import android.speech.tts.TextToSpeech;
 import java.util.Locale;
+import android.media.AudioAttributes;
+import android.media.AudioManager;
+import android.media.SoundPool;
+import java.util.HashMap;
+import java.util.Map;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -80,7 +86,7 @@ public class MainActivity extends AppCompatActivity {
     private static final String PREF_USER_VOICE_ID = "userVoiceId";
 
     // WebSocket configuration
-    private static final String SERVER_URL = "wss://jovani-unbanded-benjamin.ngrok-free.dev";
+    private static final String SERVER_URL = "wss://paramagnetic-multifaceted-elissa.ngrok-free.dev";
     private WebSocketClient webSocketClient;
     private static final int RECORD_AUDIO_PERMISSION_CODE = 1;
     private static final int CAMERA_PERMISSION_CODE = 2;
@@ -127,12 +133,12 @@ public class MainActivity extends AppCompatActivity {
     private static final int BUFFER_SIZE_MULTIPLIER = 4; // Increased buffer size
 
     // Real-time chunk parameters
-    private static final int CHUNK_INTERVAL_MS = 3000; // Send chunks every 3 seconds
+    private static final int CHUNK_INTERVAL_MS = 6000; // Send chunks every 3 seconds
     private static final int BYTES_PER_SECOND = SAMPLE_RATE * 2; // 16-bit = 2 bytes per sample, mono
     private static final int CHUNK_SIZE_BYTES = (CHUNK_INTERVAL_MS * BYTES_PER_SECOND) / 1000; // ~96KB for 3 seconds
 
     private static final int MIN_RECORDING_DURATION_MS = 300; // Catch very quick speech
-    private static final int OVERLAP_DURATION_MS = 500; // More overlap to prevent cutting
+    private static final int OVERLAP_DURATION_MS = 1500; // More overlap to prevent cutting
 
     // Audio data collection with buffering - Minimize downtime
     private List<byte[]> audioChunks = new ArrayList<>();
@@ -185,6 +191,11 @@ public class MainActivity extends AppCompatActivity {
     private String lastSpokenGesture = ""; // Track last spoken gesture to avoid repeating
     private long lastSpokenGestureTime = 0; // Track when last gesture was spoken
     private static final long GESTURE_SPEAK_COOLDOWN_MS = 3000; // 3 seconds cooldown between same gestures
+
+    //tts
+    private SoundPool soundPool;
+    private Map<String, Integer> soundIdMap = new HashMap<>();
+    private String lastGesture = "";
 
 
     @Override
@@ -372,6 +383,7 @@ public class MainActivity extends AppCompatActivity {
 
         // Initialize Text-to-Speech for gesture announcements
         initializeTextToSpeech();
+        initializeSoundPool();
 
         // Initialize executor services for parallel processing
         initializeExecutorServices();
@@ -1273,7 +1285,8 @@ public class MainActivity extends AppCompatActivity {
                                                 processingStatus.setText("Gesture detected: " + gestureText.toString());
 
                                                 // Speak the gesture out loud using Text-to-Speech (clean names only)
-                                                speakGesture(gestureNamesForTTS.toString());
+                                                //speakGesture(gestureNamesForTTS.toString());
+                                                playGestureSound(gestureNamesForTTS.toString());
                                             } else {
                                                 android.util.Log.i(TAG, "No gestures detected in response");
                                                 if (gestureDisplay != null) {
@@ -3359,6 +3372,51 @@ public class MainActivity extends AppCompatActivity {
             Log.e(TAG, "Error during cleanup: " + e.getMessage());
         }
         Log.i(TAG, "======================================");
+    }
+
+    // ====================== MP3 播放 TTS 核心功能 ======================
+    private void initializeSoundPool() {
+        AudioAttributes attrs = new AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_GAME)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build();
+
+        soundPool = new SoundPool.Builder()
+                .setMaxStreams(10)
+                .setAudioAttributes(attrs)
+                .build();
+
+        // 載入你的 mp3 檔（檔名必須跟 res/raw/ 完全一樣，全小寫！）
+        soundIdMap.put("thanks", soundPool.load(this, R.raw.thanks, 1));        // thanks 手勢 → 播放 a.mp3
+        soundIdMap.put("a",      soundPool.load(this, R.raw.a, 1));   // a 手勢 → 播放 thanks.mp3
+        soundIdMap.put("one",    soundPool.load(this, R.raw.beep, 1));     // one 手勢 → 播放 beep.mp3
+
+        // 你之後想加其他手勢就繼續加這行，例如：
+        // soundIdMap.put("victory", soundPool.load(this, R.raw.victory, 1));
+
+        Log.i(TAG, "✅ MP3 TTS 音效載入完成");
+    }
+
+    private void playGestureSound(String gesture) {
+        if (gesture == null || gesture.isEmpty()) return;
+
+        String cleanGesture = gesture.trim().toLowerCase();
+
+        if (cleanGesture.equals(lastGesture)) {
+            return; // 防重複
+        }
+
+        if (soundIdMap.containsKey(cleanGesture)) {
+            // 強制把系統音量開到最大（眼鏡上超大聲！）
+            AudioManager audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+            int maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, maxVolume, 0);
+
+            soundPool.play(soundIdMap.get(cleanGesture), 1f, 1f, 1, 0, 1f);
+            Log.i(TAG, "🎵 播放手勢音效 → " + cleanGesture + " (已強制最大音量)");
+
+            lastGesture = cleanGesture;
+        }
     }
 
     @Override
