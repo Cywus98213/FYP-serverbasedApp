@@ -3395,9 +3395,9 @@ public class MainActivity extends AppCompatActivity {
         soundIdMap.put("thanks", soundPool.load(this, R.raw.thanks, 1));        // thanks 手勢 → 播放 thanks.mp3
         soundIdMap.put("a",      soundPool.load(this, R.raw.a, 1));   // a 手勢 → 播放 a.mp3
         soundIdMap.put("one",    soundPool.load(this, R.raw.beep, 1));     // one 手勢 → 播放 beep.mp3
-        soundIdMap.put("K",    soundPool.load(this, R.raw.k, 1));     // one 手勢 → 播放 beep.mp3
-        soundIdMap.put("O",    soundPool.load(this, R.raw.o, 1));     // one 手勢 → 播放 beep.mp3
-        soundIdMap.put("C",    soundPool.load(this, R.raw.c, 1));     // one 手勢 → 播放 beep.mp3
+        soundIdMap.put("k",    soundPool.load(this, R.raw.k, 1));     // one 手勢 → 播放 beep.mp3
+        soundIdMap.put("o",    soundPool.load(this, R.raw.o, 1));     // one 手勢 → 播放 beep.mp3
+        soundIdMap.put("c",    soundPool.load(this, R.raw.c, 1));     // one 手勢 → 播放 beep.mp3
         // 你之後想加其他手勢就繼續加這行，例如：
         // soundIdMap.put("victory", soundPool.load(this, R.raw.victory, 1));
 
