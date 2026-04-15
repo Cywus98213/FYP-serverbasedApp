@@ -80,7 +80,7 @@ public class MainActivity extends AppCompatActivity {
     private static final String PREF_USER_VOICE_ID = "userVoiceId";
 
     // WebSocket configuration
-    private static final String SERVER_URL = "wss://jovani-unbanded-benjamin.ngrok-free.dev";
+    private static final String SERVER_URL = "ws://192.168.50.5:8080";
     private WebSocketClient webSocketClient;
     private static final int RECORD_AUDIO_PERMISSION_CODE = 1;
     private static final int CAMERA_PERMISSION_CODE = 2;
@@ -127,12 +127,14 @@ public class MainActivity extends AppCompatActivity {
     private static final int BUFFER_SIZE_MULTIPLIER = 4; // Increased buffer size
 
     // Real-time chunk parameters
-    private static final int CHUNK_INTERVAL_MS = 3000; // Send chunks every 3 seconds
+    private static final int CHUNK_WINDOW_MS = 1500; // Send 1.5s rolling windows
+    private static final int CHUNK_STEP_MS = 750; // Advance window every 0.75s (50% overlap)
     private static final int BYTES_PER_SECOND = SAMPLE_RATE * 2; // 16-bit = 2 bytes per sample, mono
-    private static final int CHUNK_SIZE_BYTES = (CHUNK_INTERVAL_MS * BYTES_PER_SECOND) / 1000; // ~96KB for 3 seconds
+    private static final int CHUNK_WINDOW_SIZE_BYTES = (CHUNK_WINDOW_MS * BYTES_PER_SECOND) / 1000;
+    private static final int CHUNK_OVERLAP_MS = CHUNK_WINDOW_MS - CHUNK_STEP_MS;
+    private static final int CHUNK_OVERLAP_SIZE_BYTES = (CHUNK_OVERLAP_MS * BYTES_PER_SECOND) / 1000;
 
     private static final int MIN_RECORDING_DURATION_MS = 300; // Catch very quick speech
-    private static final int OVERLAP_DURATION_MS = 500; // More overlap to prevent cutting
 
     // Audio data collection with buffering - Minimize downtime
     private List<byte[]> audioChunks = new ArrayList<>();
@@ -142,7 +144,7 @@ public class MainActivity extends AppCompatActivity {
     private long recordingStartTime = 0;
 
     // Real-time chunk tracking
-    private List<byte[]> currentChunkBuffer = new ArrayList<>(); // Buffer for current 3-second chunk
+    private List<byte[]> currentChunkBuffer = new ArrayList<>(); // Rolling buffer for the active real-time window
     private int currentChunkBytes = 0; // Bytes in current chunk
     private Handler chunkHandler = new Handler(Looper.getMainLooper()); // Handler for chunk timer
 
@@ -1494,23 +1496,17 @@ public class MainActivity extends AppCompatActivity {
                 currentChunkBytes = 0;
                 recordingStartTime = System.currentTimeMillis();
 
-                // Start chunk timer - send chunks every 3 seconds with NO overlap
-                // For real-time, we want clean boundaries even if speech is cut off
+                // Start chunk timer - send 1.5s windows every 0.75s with 50% overlap
                 chunkHandler.postDelayed(new Runnable() {
                     @Override
                     public void run() {
                         if (isRecording && isInConversation) {
                             sendRealTimeChunk();
-                            // Clear buffer immediately after sending to prevent overlap
-                            synchronized (currentChunkBuffer) {
-                                currentChunkBuffer.clear();
-                                currentChunkBytes = 0;
-                            }
                             // Schedule next chunk
-                            chunkHandler.postDelayed(this, CHUNK_INTERVAL_MS);
+                            chunkHandler.postDelayed(this, CHUNK_STEP_MS);
                         }
                     }
-                }, CHUNK_INTERVAL_MS);
+                }, CHUNK_WINDOW_MS);
 
                 int totalBytesRead = 0;
                 int chunkCount = 0;
@@ -1556,7 +1552,7 @@ public class MainActivity extends AppCompatActivity {
 
                 // Send any remaining audio as final chunk
                 if (currentChunkBytes > 0) {
-                    sendRealTimeChunk();
+                    sendRealTimeChunk(true);
                 }
 
             }).start();
@@ -2041,23 +2037,50 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void sendRealTimeChunk() {
+        sendRealTimeChunk(false);
+    }
+
+    private void sendRealTimeChunk(boolean allowPartialChunk) {
         // Send accumulated chunk buffer as real-time chunk
         synchronized (currentChunkBuffer) {
             if (currentChunkBuffer.isEmpty() || currentChunkBytes == 0) {
                 return;
             }
 
+            if (!allowPartialChunk && currentChunkBytes < CHUNK_WINDOW_SIZE_BYTES) {
+                return;
+            }
+
             // Combine chunk buffer into single array
-            byte[] chunkAudio = new byte[currentChunkBytes];
+            byte[] bufferedAudio = new byte[currentChunkBytes];
             int offset = 0;
             for (byte[] chunk : currentChunkBuffer) {
-                System.arraycopy(chunk, 0, chunkAudio, offset, chunk.length);
+                System.arraycopy(chunk, 0, bufferedAudio, offset, chunk.length);
                 offset += chunk.length;
             }
 
-            // Clear chunk buffer for next chunk
+            int chunkStart = allowPartialChunk || bufferedAudio.length <= CHUNK_WINDOW_SIZE_BYTES
+                    ? 0
+                    : bufferedAudio.length - CHUNK_WINDOW_SIZE_BYTES;
+            int chunkLength = allowPartialChunk
+                    ? bufferedAudio.length
+                    : Math.min(CHUNK_WINDOW_SIZE_BYTES, bufferedAudio.length - chunkStart);
+            byte[] chunkAudio = new byte[chunkLength];
+            System.arraycopy(bufferedAudio, chunkStart, chunkAudio, 0, chunkLength);
+
+            int retainedBytes = allowPartialChunk ? 0 : Math.min(CHUNK_OVERLAP_SIZE_BYTES, chunkAudio.length);
+            byte[] retainedAudio = new byte[retainedBytes];
+            if (retainedBytes > 0) {
+                System.arraycopy(chunkAudio, chunkAudio.length - retainedBytes, retainedAudio, 0, retainedBytes);
+            }
+
+            // Keep the overlap for the next rolling window
             currentChunkBuffer.clear();
             currentChunkBytes = 0;
+            if (retainedBytes > 0) {
+                currentChunkBuffer.add(retainedAudio);
+                currentChunkBytes = retainedBytes;
+            }
 
             // Send chunk using dedicated audio processing executor
             if (audioProcessingExecutor != null && !audioProcessingExecutor.isShutdown()) {
