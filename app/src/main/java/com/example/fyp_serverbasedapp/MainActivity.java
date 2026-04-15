@@ -133,12 +133,12 @@ public class MainActivity extends AppCompatActivity {
     private static final int BUFFER_SIZE_MULTIPLIER = 4; // Increased buffer size
 
     // Real-time chunk parameters
-    private static final int CHUNK_INTERVAL_MS = 6000; // Send chunks every 3 seconds
+    private static final int CHUNK_INTERVAL_MS = 3000; // Send chunks every 3 seconds
     private static final int BYTES_PER_SECOND = SAMPLE_RATE * 2; // 16-bit = 2 bytes per sample, mono
     private static final int CHUNK_SIZE_BYTES = (CHUNK_INTERVAL_MS * BYTES_PER_SECOND) / 1000; // ~96KB for 3 seconds
 
     private static final int MIN_RECORDING_DURATION_MS = 300; // Catch very quick speech
-    private static final int OVERLAP_DURATION_MS = 1500; // More overlap to prevent cutting
+    private static final int OVERLAP_DURATION_MS = 500; // More overlap to prevent cutting
 
     // Audio data collection with buffering - Minimize downtime
     private List<byte[]> audioChunks = new ArrayList<>();
@@ -196,6 +196,7 @@ public class MainActivity extends AppCompatActivity {
     private SoundPool soundPool;
     private Map<String, Integer> soundIdMap = new HashMap<>();
     private String lastGesture = "";
+    private long lastGestureTime = 0;
 
 
     @Override
@@ -3390,7 +3391,7 @@ public class MainActivity extends AppCompatActivity {
         soundIdMap.put("thanks", soundPool.load(this, R.raw.thanks, 1));        // thanks 手勢 → 播放 a.mp3
         soundIdMap.put("a",      soundPool.load(this, R.raw.a, 1));   // a 手勢 → 播放 thanks.mp3
         soundIdMap.put("one",    soundPool.load(this, R.raw.beep, 1));     // one 手勢 → 播放 beep.mp3
-
+        soundIdMap.put("k",    soundPool.load(this, R.raw.k, 1));     // one 手勢 → 播放 beep.mp3
         // 你之後想加其他手勢就繼續加這行，例如：
         // soundIdMap.put("victory", soundPool.load(this, R.raw.victory, 1));
 
@@ -3402,20 +3403,26 @@ public class MainActivity extends AppCompatActivity {
 
         String cleanGesture = gesture.trim().toLowerCase();
 
-        if (cleanGesture.equals(lastGesture)) {
-            return; // 防重複
+        long currentTime = System.currentTimeMillis();
+
+        // 時間冷卻機制：同一個手勢至少要隔 1200ms 才能再次播放（可調整）
+        if (cleanGesture.equals(lastGesture) && (currentTime - lastGestureTime < 1200)) {
+            return; // 還在冷卻中，不播放
         }
 
         if (soundIdMap.containsKey(cleanGesture)) {
-            // 強制把系統音量開到最大（眼鏡上超大聲！）
+            // 強制最大音量（眼鏡超大聲）
             AudioManager audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
             int maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
             audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, maxVolume, 0);
 
             soundPool.play(soundIdMap.get(cleanGesture), 1f, 1f, 1, 0, 1f);
+
             Log.i(TAG, "🎵 播放手勢音效 → " + cleanGesture + " (已強制最大音量)");
 
+            // 更新時間記錄
             lastGesture = cleanGesture;
+            lastGestureTime = currentTime;
         }
     }
 
