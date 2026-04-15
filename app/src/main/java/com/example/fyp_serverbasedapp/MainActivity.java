@@ -2088,6 +2088,10 @@ public class MainActivity extends AppCompatActivity {
 
                         // Send as real-time chunk
                         sendWavAudioToServer(base64Audio, true);
+                        // ================== 這裡加上這一行 ==================
+                        audioBuffer.clear();        // ←←← 關鍵！清空 audioBuffer
+                        // ===================================================
+
 
                     } catch (Exception e) {
                         Log.e(TAG, "Error sending real-time chunk: " + e.getMessage());
@@ -3392,6 +3396,8 @@ public class MainActivity extends AppCompatActivity {
         soundIdMap.put("a",      soundPool.load(this, R.raw.a, 1));   // a 手勢 → 播放 thanks.mp3
         soundIdMap.put("one",    soundPool.load(this, R.raw.beep, 1));     // one 手勢 → 播放 beep.mp3
         soundIdMap.put("k",    soundPool.load(this, R.raw.k, 1));     // one 手勢 → 播放 beep.mp3
+        soundIdMap.put("o",    soundPool.load(this, R.raw.o, 1));     // one 手勢 → 播放 beep.mp3
+        soundIdMap.put("c",    soundPool.load(this, R.raw.c, 1));     // one 手勢 → 播放 beep.mp3
         // 你之後想加其他手勢就繼續加這行，例如：
         // soundIdMap.put("victory", soundPool.load(this, R.raw.victory, 1));
 
