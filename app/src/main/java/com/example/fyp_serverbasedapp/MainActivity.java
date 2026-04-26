@@ -3379,7 +3379,7 @@ public class MainActivity extends AppCompatActivity {
         Log.i(TAG, "======================================");
     }
 
-    // ====================== MP3 播放 TTS 核心功能 ======================
+    // TTS
     private void initializeSoundPool() {
         AudioAttributes attrs = new AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_GAME)
@@ -3391,17 +3391,17 @@ public class MainActivity extends AppCompatActivity {
                 .setAudioAttributes(attrs)
                 .build();
 
-        // 載入你的 mp3 檔（檔名必須跟 res/raw/ 完全一樣，全小寫！）
-        soundIdMap.put("thanks", soundPool.load(this, R.raw.thanks, 1));        // thanks 手勢 → 播放 thanks.mp3
-        soundIdMap.put("a",      soundPool.load(this, R.raw.a, 1));   // a 手勢 → 播放 a.mp3
-        soundIdMap.put("one",    soundPool.load(this, R.raw.beep, 1));     // one 手勢 → 播放 beep.mp3
-        soundIdMap.put("k",    soundPool.load(this, R.raw.k, 1));     // one 手勢 → 播放 beep.mp3
-        soundIdMap.put("o",    soundPool.load(this, R.raw.o, 1));     // one 手勢 → 播放 beep.mp3
-        soundIdMap.put("c",    soundPool.load(this, R.raw.c, 1));     // one 手勢 → 播放 beep.mp3
-        // 你之後想加其他手勢就繼續加這行，例如：
+        // load mp3（The file name must be exactly the same as res/raw/, and all lowercase）
+        soundIdMap.put("thanks", soundPool.load(this, R.raw.thanks, 1));        // thanks Gesture → Play thanks.mp3
+        soundIdMap.put("a",      soundPool.load(this, R.raw.a, 1));   // a Gesture → Play a.mp3
+        soundIdMap.put("one",    soundPool.load(this, R.raw.beep, 1));     // one Gesture → Play beep.mp3
+        soundIdMap.put("k",    soundPool.load(this, R.raw.k, 1));     // k Gesture → Play k.mp3
+        soundIdMap.put("o",    soundPool.load(this, R.raw.o, 1));     // o Gesture → Play o.mp3
+        soundIdMap.put("c",    soundPool.load(this, R.raw.c, 1));     // c Gesture → Play c.mp3
+        // If you want to add other gestures later, just continue adding to this line, for example:
         // soundIdMap.put("victory", soundPool.load(this, R.raw.victory, 1));
 
-        Log.i(TAG, "✅ MP3 TTS 音效載入完成");
+        Log.i(TAG, "MP3 TTS loaded");
     }
 
     private void playGestureSound(String gesture) {
@@ -3411,22 +3411,22 @@ public class MainActivity extends AppCompatActivity {
 
         long currentTime = System.currentTimeMillis();
 
-        // 時間冷卻機制：同一個手勢至少要隔 1200ms 才能再次播放（可調整）
+        // Cooldown mechanism: The same gesture must wait at least 1200ms before it can be played again (adjustable).
         if (cleanGesture.equals(lastGesture) && (currentTime - lastGestureTime < 1200)) {
-            return; // 還在冷卻中，不播放
+            return; // Still cooling down, not playing.
         }
 
         if (soundIdMap.containsKey(cleanGesture)) {
-            // 強制最大音量（眼鏡超大聲）
+            // maximum volume
             AudioManager audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
             int maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
             audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, maxVolume, 0);
 
             soundPool.play(soundIdMap.get(cleanGesture), 1f, 1f, 1, 0, 1f);
 
-            Log.i(TAG, "🎵 播放手勢音效 → " + cleanGesture + " (已強制最大音量)");
+            Log.i(TAG, "Play gesture sound " + cleanGesture + " Maximum volume already set");
 
-            // 更新時間記錄
+            // update time
             lastGesture = cleanGesture;
             lastGestureTime = currentTime;
         }
